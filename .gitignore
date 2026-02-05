@@ -1,0 +1,49 @@
+# Python Standard
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+.env
+.venv
+venv/
+ENV/
+
+# Database (CRITICAL: Do not publish patient data)
+*.db
+*.sqlite3
+backend/medical_records.db
+
+# File Uploads (Do not publish scanned docs)
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# IDE Settings
+.vscode/
+.idea/
+*.swp
+
+# OS Junk
+.DS_Store
+Thumbs.db
+
+# Local AI/Model specific
+models/
