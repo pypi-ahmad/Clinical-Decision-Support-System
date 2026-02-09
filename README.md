@@ -75,8 +75,8 @@ graph TD
 
 1.  **Clone the Repository**
     ```bash
-    git clone https://github.com/yourusername/mediscan-ocr.git
-    cd mediscan-ocr
+    git clone https://github.com/pypi-ahmad/Clinical-Decision-Support-System.git
+    cd Clinical-Decision-Support-System
     ```
 
 2.  **Install Python Dependencies**
