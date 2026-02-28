@@ -72,8 +72,8 @@ def analyze_medical_logic(current_data, past_data, provider="Ollama", model="lfm
         response = get_ai_response(provider, model, api_key, REASONING_PROMPT, context)
         # Clean and return JSON
         return json.loads(clean_json_output(response))
-    except:
-        return {"summary": "Analysis failed", "alerts": []}
+    except Exception:
+        return {"summary": "Analysis failed", "alerts": [], "trends": []}
 
 def check_insurance_coverage(medical_data, policy_text, provider="Ollama", model="glm-4.7-flash", api_key=None):
     """

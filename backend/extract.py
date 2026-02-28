@@ -10,8 +10,7 @@ It utilizes the `pdf2image` library for PDF conversion and calls the `ai_wrapper
 
 import ollama
 import json
-import re
-import base64
+import os
 from pdf2image import convert_from_path
 from backend.ai_wrapper import get_ai_response, clean_json_output
 
@@ -29,29 +28,6 @@ You are a medical data entry specialist. Convert the text below into valid JSON 
 }
 Return ONLY JSON.
 """
-
-def clean_json(text):
-    """
-    Deprecated: Use clean_json_output from ai_wrapper instead.
-    Kept for backward compatibility within this file if needed.
-    """
-    match = re.search(r'(\{.*\})', text, re.DOTALL)
-    if match: return match.group(1)
-    return text
-
-def encode_image_to_base64(image_path):
-    """
-    Helper to convert an image file to a base64 encoded string.
-    Useful if we need to send image data as text/json payloads.
-    
-    Args:
-        image_path (str): Path to the image file.
-        
-    Returns:
-        str: Base64 string of the image.
-    """
-    with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode('utf-8')
 
 def process_document_pipeline(file_path: str, provider="Ollama", model="glm-4.7-flash", api_key=None):
     """
@@ -72,12 +48,13 @@ def process_document_pipeline(file_path: str, provider="Ollama", model="glm-4.7-
     print(f"👀 OCR Scanning: {file_path}")
     
     image_data = None
+    temp_img_path = None
     
     # --- PHASE 1: PRE-PROCESSING (HANDLE PDF vs IMAGE) ---
     if file_path.lower().endswith('.pdf'):
         try:
             # Convert first page of PDF to image using pdf2image (requires Poppler)
-            images = convert_from_path(file_path)
+            images = convert_from_path(file_path, first_page=1, last_page=1)
             if images:
                 # Save temp image to send to OCR
                 temp_img_path = file_path + "_temp.jpg"
@@ -95,30 +72,34 @@ def process_document_pipeline(file_path: str, provider="Ollama", model="glm-4.7-
     # --- PHASE 2: OCR (THE EYE) ---
     # We use Ollama's DeepSeek-OCR locally because it is specialized and free for vision tasks.
     try:
-        print(f"👀 OCR Scanning with DeepSeek-OCR...")
-        # Note: Ollama python client handles file paths automatically if they point to valid images
-        ocr_response = ollama.chat(
-            model='deepseek-ocr',
-            messages=[{
-                'role': 'user', 
-                'content': 'Transcribe this medical document text exactly.', 
-                'images': [image_data]
-            }]
-        )
-        raw_text = ocr_response['message']['content']
-        print(f"✅ OCR Success. Raw Text Length: {len(raw_text)}")
+        try:
+            print(f"👀 OCR Scanning with DeepSeek-OCR...")
+            # Note: Ollama python client handles file paths automatically if they point to valid images
+            ocr_response = ollama.chat(
+                model='deepseek-ocr',
+                messages=[{
+                    'role': 'user', 
+                    'content': 'Transcribe this medical document text exactly.', 
+                    'images': [image_data]
+                }]
+            )
+            raw_text = ocr_response['message']['content']
+            print(f"✅ OCR Success. Raw Text Length: {len(raw_text)}")
+            
+        except Exception as e:
+            return {"error": f"Ollama OCR failed: {str(e)}"}
         
-    except Exception as e:
-        return {"error": f"Ollama OCR failed: {str(e)}"}
-    
-    # --- PHASE 3: STRUCTURING (THE CLERK) ---
-    # We use the 'ai_wrapper' to allow the user to choose their preferred model (Clerk).
-    print(f"📝 Structuring Data with {provider} ({model})...")
-    try:
-        raw_response = get_ai_response(provider, model, api_key, SYSTEM_PROMPT, f"OCR TEXT:\n{raw_text}")
-        
-        # Clean and Parse JSON
-        json_str = clean_json_output(raw_response)
-        return json.loads(json_str)
-    except Exception as e:
-        return {"error": f"Structuring failed: {str(e)}", "raw_text": raw_text}
+        # --- PHASE 3: STRUCTURING (THE CLERK) ---
+        # We use the 'ai_wrapper' to allow the user to choose their preferred model (Clerk).
+        print(f"📝 Structuring Data with {provider} ({model})...")
+        try:
+            raw_response = get_ai_response(provider, model, api_key, SYSTEM_PROMPT, f"OCR TEXT:\n{raw_text}")
+            
+            # Clean and Parse JSON
+            json_str = clean_json_output(raw_response)
+            return json.loads(json_str)
+        except Exception as e:
+            return {"error": f"Structuring failed: {str(e)}"}
+    finally:
+        if temp_img_path and os.path.exists(temp_img_path):
+            os.remove(temp_img_path)
