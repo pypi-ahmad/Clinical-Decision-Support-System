@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import shutil
 import os
 import json
+import uuid
 from backend.database import init_db, save_record, get_patient_history
 from backend.extract import process_document_pipeline
 from backend.logic import analyze_medical_logic, check_insurance_coverage
@@ -60,7 +61,8 @@ async def analyze_medical_doc(
         JSON with extracted data, analysis results, history status, and file path.
     """
     # 1. Save File Locally
-    file_path = f"backend/uploads/{file.filename}"
+    safe_filename = os.path.basename(file.filename or "upload.bin")
+    file_path = os.path.join("backend", "uploads", f"{uuid.uuid4().hex}_{safe_filename}")
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     
@@ -106,11 +108,15 @@ async def check_insurance(
     content = await policy_file.read()
     try:
         policy_text = content.decode('utf-8')
-    except:
+    except UnicodeDecodeError:
         policy_text = "Binary PDF content - (Simulated OCR would go here)"
     
     # 2. Run Analysis
-    medical_data = json.loads(medical_json)
+    try:
+        medical_data = json.loads(medical_json)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid medical_json: {str(exc)}")
+
     result = check_insurance_coverage(medical_data, policy_text)
     
     return result
@@ -121,6 +127,9 @@ def confirm_record(data: dict):
     Endpoint to finalize and save a record to the database.
     Called after the user validates the data in the frontend.
     """
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=422, detail="Payload must be a JSON object")
+
     save_record(data)
     return {"status": "saved"}
 

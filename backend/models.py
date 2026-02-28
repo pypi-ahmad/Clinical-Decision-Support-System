@@ -5,8 +5,15 @@ This module defines the Pydantic schemas used to enforce data structure consiste
 across the application. These models ensure that the AI outputs match the expected format.
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
+
+class Encounter(BaseModel):
+    """Schema for encounter metadata."""
+    date: Optional[str] = None
+    provider: Optional[str] = None
+    facility: Optional[str] = None
+
 
 class Patient(BaseModel):
     """Schema for Patient demographics."""
@@ -16,9 +23,9 @@ class Patient(BaseModel):
 
 class ClinicalData(BaseModel):
     """Schema for clinical findings."""
-    diagnosis_list: List[str] = []
-    medications: List[dict] = []
-    vitals: dict = {}
+    diagnosis_list: List[str] = Field(default_factory=list)
+    medications: List[dict] = Field(default_factory=list)
+    vitals: dict = Field(default_factory=dict)
 
 class MedicalRecord(BaseModel):
     """
@@ -26,5 +33,6 @@ class MedicalRecord(BaseModel):
     Combines Patient demographics and Clinical Data.
     """
     patient: Patient
+    encounter: Optional[Encounter] = None
     encounter_date: Optional[str] = None
-    clinical: ClinicalData
+    clinical: ClinicalData = Field(default_factory=ClinicalData)

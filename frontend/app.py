@@ -71,7 +71,7 @@ with st.sidebar:
             }
             try:
                 # Call Backend API
-                response = requests.post(f"{API_URL}/analyze", files=files, data=data)
+                response = requests.post(f"{API_URL}/analyze", files=files, data=data, timeout=60)
                 if response.status_code == 200:
                     data = response.json()
                     # Update Session State
@@ -107,7 +107,7 @@ with tab1:
                         with open(st.session_state['pdf_path'], "rb") as f:
                             pdf_bytes = f.read()
                         pdf_viewer(input=pdf_bytes, width=700, height=800)
-                    except:
+                    except Exception:
                         st.warning("Could not load PDF preview.")
                 else:
                     st.image(st.session_state['pdf_path'])
@@ -124,8 +124,14 @@ with tab1:
             )
             
             if st.button("💾 Confirm & Save to Database"):
-                # Call save endpoint
-                st.toast("Record Saved successfully!", icon="✅")
+                try:
+                    save_response = requests.post(f"{API_URL}/confirm", json=edited_data, timeout=60)
+                    if save_response.status_code == 200:
+                        st.toast("Record Saved successfully!", icon="✅")
+                    else:
+                        st.error(f"Save failed: {save_response.text}")
+                except Exception as e:
+                    st.error(f"Save Error: {e}")
 
     else:
         st.info("Please upload a document in the sidebar to begin.")
@@ -175,16 +181,19 @@ with tab3:
     if st.session_state['extracted_data']:
         data = st.session_state['extracted_data']
         st.header("🔬 Detailed Breakdown")
+        clinical_data = data.get('clinical', {})
+        medications = clinical_data.get('medications', [])
+        diagnosis_list = clinical_data.get('diagnosis_list', [])
         
         # Clinical Data Table
         st.subheader("Medications")
-        if data['clinical']['medications']:
-            st.table(pd.DataFrame(data['clinical']['medications']))
+        if medications:
+            st.table(pd.DataFrame(medications))
         else:
             st.write("No medications found.")
             
         st.subheader("Diagnosis")
-        for diag in data['clinical']['diagnosis_list']:
+        for diag in diagnosis_list:
             st.markdown(f"- **{diag}**")
             
     else:
@@ -205,21 +214,21 @@ with tab4:
                 payload = {"medical_json": json.dumps(st.session_state['extracted_data'])}
                 
                 try:
-                    res = requests.post(f"{API_URL}/check_insurance", files=files, data=payload)
+                    res = requests.post(f"{API_URL}/check_insurance", files=files, data=payload, timeout=60)
                     if res.status_code == 200:
                         result = res.json()
                         
-                        if result['eligible']:
+                        if result.get('eligible'):
                             st.success("✅ Likely Eligible")
                         else:
                             st.error("❌ Risk of Rejection")
                             
                         st.subheader("Reasoning")
-                        st.write(result['reasoning'])
+                        st.write(result.get('reasoning', 'No reasoning provided.'))
                         
-                        if result['missing_info']:
+                        if result.get('missing_info'):
                             st.warning("⚠️ Missing Documents:")
-                            for item in result['missing_info']:
+                            for item in result.get('missing_info', []):
                                 st.write(f"- {item}")
                     else:
                         st.error("Check failed.")

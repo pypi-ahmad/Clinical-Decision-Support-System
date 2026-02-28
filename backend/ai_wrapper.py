@@ -14,8 +14,6 @@ import ollama
 from openai import OpenAI
 import anthropic
 import google.genai as genai
-import json
-import os
 import re
 
 def get_ai_response(provider, model, api_key, system_prompt, user_text):
@@ -82,6 +80,8 @@ def get_ai_response(provider, model, api_key, system_prompt, user_text):
                 messages=[{"role": "user", "content": user_text}]
             )
             return response.content[0].text
+
+        return f"Error with {provider}: Unsupported provider"
 
     except Exception as e:
         return f"Error with {provider}: {str(e)}"
