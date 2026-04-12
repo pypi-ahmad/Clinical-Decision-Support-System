@@ -1,303 +1,297 @@
+<div align="center">
+
 # MediScan OCR
 
-Implementation-accurate documentation for the current repository.
+**Intelligent Clinical Document Processing & Decision Support**
 
-For a shorter startup path, see `README.quickstart.md`.
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io)
+[![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraph/)
+[![Tests](https://img.shields.io/badge/tests-131%20passed-brightgreen)]()
+[![Coverage](https://img.shields.io/badge/coverage-76%25-yellowgreen)]()
+
+[Quick Start](#quick-start) · [Architecture](#architecture) · [Usage Guide](USAGE.md) · [API Reference](#api-reference) · [Contributing](#roadmap)
+
+</div>
+
+---
 
 ## Overview
 
-MediScan OCR is a FastAPI + Streamlit application for medical document intake, structuring, review, reasoning, insurance checks, and persistence.
+MediScan OCR transforms unstructured medical documents into validated, machine-readable clinical records. It combines pluggable OCR engines, LLM-powered structuring, graph-based extraction workflows, and semantic retrieval to produce auditable, correctable output — bridging the gap between paper-based clinical data and downstream decision-support systems.
 
-The current repository implements:
+### Key Features
 
-- Multi-page PDF and image ingestion.
-- Pluggable OCR backends.
-- Separate OCR, structuring, and reasoning model configuration.
-- Optional LangGraph-based extraction orchestration.
-- SQLite persistence for confirmed records.
-- Qdrant-first semantic retrieval with exact metadata filters.
-- Annotated artifact generation and frontend previews/downloads.
+- **Multi-engine OCR** — Swap between GLM-4V, DeepSeek, and PaddleOCR-VL backends without changing application code.
+- **Graph-based extraction** — A 12-node LangGraph pipeline (classify → OCR → extract → validate → normalize → retrieve → reason → gate) with typed state and full node-level observability.
+- **Independent model routing** — Configure separate providers and models for OCR, structuring, and clinical reasoning within a single request.
+- **Semantic retrieval** — Qdrant-backed vector search with exact metadata filters for cross-encounter context and policy clause retrieval.
+- **Artifact generation** — Bounding box overlays, annotated PDFs/images, and downloadable audit artifacts.
+- **Insurance verification** — Policy ingestion (text or OCR), semantic comparison against extracted diagnoses, and explainable eligibility reasoning.
+- **Human-in-the-loop** — Confidence-gated review flags, inline data editing, and manual correction before persistence.
 
-## Current Architecture
+## Quick Start
 
-- Frontend: `frontend/app.py`
-- API orchestration: `backend/main.py`
-- OCR/extraction orchestration: `backend/extract.py`
-- OCR backend package: `backend/ocr_backends/`
-- Artifact rendering and URLs: `backend/artifacts.py`
-- Reasoning and insurance logic: `backend/logic.py`
-- Provider adapter: `backend/ai_wrapper.py`
-- Retrieval package: `backend/retrieval/`
-- Granular extraction graph: `backend/workflows/extraction_graph.py`
-- First-gen agentic workflow: `backend/workflows/agentic_extraction.py`
-- Persistence: `backend/database.py`
+```bash
+# Clone
+git clone https://github.com/pypi-ahmad/Clinical-Decision-Support-System.git
+cd Clinical-Decision-Support-System
 
-```mermaid
-flowchart LR
-    UI[Streamlit\nfrontend/app.py] -->|/analyze| API[FastAPI\nbackend/main.py]
-    UI -->|/check_insurance| API
-    UI -->|/confirm| API
+# Environment
+python -m venv .venv && .venv\Scripts\Activate.ps1   # Windows
+# source .venv/bin/activate                           # Linux / macOS
 
-    API --> EXT[Direct pipeline\nbackend/extract.py]
-    API --> EG[Extraction graph\nbackend/workflows/extraction_graph.py]
-    API --> WF[Agentic workflow\nbackend/workflows/agentic_extraction.py]
-    API --> LOG[Reasoning\nbackend/logic.py]
-    API --> RET[Retrieval\nbackend/retrieval]
-    API --> DB[SQLite\nbackend/database.py]
+# Dependencies
+pip install --upgrade pip && pip install -r requirements.txt
 
-    EXT --> OCR[OCR Backends\nollama | glm | paddle]
-    EXT --> AIW[AI Wrapper\nbackend/ai_wrapper.py]
-    EG --> OCR
-    EG --> AIW
-    LOG --> AIW
-    RET --> QDR[(Qdrant)]
+# Launch
+python -m uvicorn backend.main:app --reload --port 8000   # Terminal 1
+streamlit run frontend/app.py                              # Terminal 2
 ```
 
-## Analyze Flow
+> **Prerequisites:** [Poppler](https://poppler.freedesktop.org/) for PDF rendering, [Ollama](https://ollama.com/) for local LLM inference. See [USAGE.md](USAGE.md) for PaddleOCR-VL and Qdrant setup.
 
-`POST /analyze` now works as follows:
+## Architecture
 
-1. Save the upload under `backend/uploads/` with a UUID prefix.
-2. Render all pages for PDFs into `*_artifacts/pages/`.
-3. Run the selected OCR backend.
-4. Build a typed OCR payload with:
-   - `per_page_results`
-   - `raw_text`
-   - `markdown`
-   - `structured_doc` when the backend provides one
-   - `bounding_boxes`
-   - `artifact_manifest`
-5. Send OCR output to the selected structuring model.
-6. Load latest exact relational history from SQLite by MRN.
-7. Optionally retrieve semantic context from Qdrant using exact filters on `patient_id_hash` and `source_type`.
-8. Run the selected reasoning model.
-9. Index the current document into retrieval storage when a vector store is configured.
+```mermaid
+flowchart TB
+    subgraph Frontend
+        UI[Streamlit UI]
+    end
 
-The response includes:
+    subgraph API ["FastAPI Backend"]
+        direction TB
+        ROUTER{Workflow Router}
+        DIRECT[Direct Pipeline]
+        GRAPH[Extraction Graph<br/><i>12-node LangGraph</i>]
+        AGENTIC[Agentic Workflow<br/><i>LangGraph</i>]
+    end
 
-- `extracted`
-- `analysis`
-- `history_available`
-- `file_path`
-- `file_url`
-- `ocr`
-- `bounding_boxes`
-- `annotated_pdf_path`
-- `annotated_pdf_url`
-- `annotated_image_paths`
-- `annotated_image_urls`
-- `page_image_urls`
-- `requires_human_review`
-- `vector_index_status`
+    subgraph Processing
+        direction TB
+        OCR[OCR Backends<br/>GLM · DeepSeek · PaddleOCR-VL]
+        STRUCT[Structuring LLM]
+        REASON[Reasoning LLM]
+        ART[Artifact Engine<br/>BBox · Annotated PDF · Overlays]
+    end
 
-## Insurance Flow
+    subgraph Storage
+        direction TB
+        SQLITE[(SQLite)]
+        QDRANT[(Qdrant)]
+    end
 
-`POST /check_insurance` supports:
+    UI -- "/analyze · /check_insurance · /confirm" --> ROUTER
+    ROUTER --> DIRECT
+    ROUTER --> GRAPH
+    ROUTER --> AGENTIC
 
-- `medical_json`
-- separate reasoning provider/model/api key
-- OCR settings for policy OCR
-- `policy_ocr=true` to run OCR over the uploaded policy before reasoning
+    DIRECT --> OCR
+    GRAPH --> OCR
+    AGENTIC --> OCR
 
-The endpoint still accepts plain UTF-8 policy text directly. When retrieval is enabled, the policy text is chunked, indexed, and queried with exact filters on `source_type=insurance_policy` and `policy_document_id`.
+    OCR --> ART
+    OCR --> STRUCT --> REASON
 
-## OCR Backends
+    REASON --> SQLITE
+    REASON --> QDRANT
+```
 
-The OCR layer lives under `backend/ocr_backends/`.
+### Project Structure
 
-| Backend | File | Implemented behavior |
-|---|---|---|
-| Ollama DeepSeek OCR | `backend/ocr_backends/ollama_ocr.py` | Multi-page OCR using Ollama chat, text-focused prompts, no native boxes |
-| Ollama GLM OCR | `backend/ocr_backends/ollama_ocr.py` | Multi-page OCR using GLM prompt modes such as `text`, `table`, and `figure` |
-| PaddleOCR-VL local Python | `backend/ocr_backends/paddleocr_vl.py` | Uses local PaddleOCR-VL runtime, captures markdown/JSON, extracts boxes when present |
-| PaddleOCR-VL local service | `backend/ocr_backends/service_client.py` | Healthcheck + timeout wrapper around Paddle service mode |
+```
+├── backend/
+│   ├── main.py                     # FastAPI entry point, endpoint routing
+│   ├── extract.py                  # Direct pipeline: OCR → structuring orchestration
+│   ├── ocr.py                      # Thin OCR dispatch layer
+│   ├── ocr_backends/
+│   │   ├── base.py                 # OCRResult, OCRPageResult, OCRBoundingBox, abstract backend
+│   │   ├── ollama_ocr.py           # GLM-4V and DeepSeek prompt templates, multi-page loop
+│   │   ├── paddleocr_vl.py         # PaddleOCR-VL local Python + service modes
+│   │   └── service_client.py       # HTTP client with healthcheck and timeout
+│   ├── workflows/
+│   │   ├── extraction_graph.py     # 12-node granular LangGraph extraction
+│   │   └── agentic_extraction.py   # First-gen coarser LangGraph workflow
+│   ├── retrieval/
+│   │   ├── chunking.py             # Sliding-window text chunking
+│   │   ├── embeddings.py           # Ollama embedding adapter
+│   │   ├── vector_store.py         # Abstract vector store interface
+│   │   ├── qdrant_store.py         # Qdrant implementation (active)
+│   │   └── pgvector_store.py       # pgvector scaffold (not live)
+│   ├── logic.py                    # Clinical reasoning and insurance logic
+│   ├── ai_wrapper.py               # Multi-provider LLM adapter (Ollama/OpenAI/Anthropic/Gemini)
+│   ├── artifacts.py                # Page rendering, annotation drawing, manifest generation
+│   ├── database.py                 # SQLite persistence layer
+│   └── models.py                   # Pydantic domain models (MedicalRecord, etc.)
+├── frontend/
+│   └── app.py                      # Streamlit application
+├── tests/
+│   ├── unit/                       # 120 unit tests across all modules
+│   └── integration/                # 11 API-level workflow tests
+├── requirements.txt
+├── pytest.ini
+├── USAGE.md                        # Comprehensive usage guide
+└── README.quickstart.md            # Minimal startup path
+```
 
-Common OCR output is normalized through `OCRResult`, `OCRPageResult`, and `OCRBoundingBox` in `backend/ocr_backends/base.py`.
+## Extraction Workflows
 
-## Retrieval
+MediScan supports three extraction modes, selectable per request.
 
-The retrieval package is now split into small modules:
+### Direct Pipeline
 
-- `backend/retrieval/chunking.py`
-- `backend/retrieval/embeddings.py`
-- `backend/retrieval/vector_store.py`
-- `backend/retrieval/qdrant_store.py`
-- `backend/retrieval/pgvector_store.py`
+Single-pass execution: OCR → structuring LLM → reasoning LLM. Lowest latency, suitable for high-confidence document types.
 
-Current behavior:
+### Granular Extraction Graph
 
-- Qdrant is the active store.
-- pgvector is scaffolded but intentionally not wired for live writes/search yet.
-- Documents are indexed by chunks with metadata such as:
-  - `patient_id_hash`
-  - `encounter_date`
-  - `source_type`
-  - `page_number`
-  - `source_ref`
-  - `ocr_backend`
+The default and recommended mode. A 12-node LangGraph with typed `ExtractionGraphState`, providing full per-node observability and conditional routing.
 
-Exact relational filters are preserved. Vector search is additive context, not a replacement for the SQLite MRN history lookup.
-
-## Agentic Extraction
-
-The `backend/workflows/` package provides two LangGraph workflow options:
-
-### Granular extraction graph (`backend/workflows/extraction_graph.py`)
-
-The default workflow selected from the UI via "Granular extraction graph". Implements the full
-step-by-step graph shape with one node per processing stage:
+```
+ingest → classify → split → ocr → extract → validate → normalize → retrieve → merge → confidence_gate ─┬─→ persist
+                                                                                                         └─→ human_review → persist
+```
 
 | Node | Responsibility |
 |---|---|
 | `ingest_document` | Verify file exists and is readable |
-| `classify_document_type` | Heuristically classify doc type from filename |
-| `split_pages` | Pre-stage before OCR (page split happens inside OCR node) |
-| `ocr_per_page` | Run selected OCR backend across all pages |
-| `extract_candidate_fields` | Structuring LLM call to extract JSON fields |
-| `validate_against_schema` | Validate against `MedicalRecord` Pydantic schema |
+| `classify_document_type` | Heuristic document type classification from filename |
+| `split_pages` | Pre-stage for multi-page documents |
+| `ocr_per_page` | Run the selected OCR backend across all pages |
+| `extract_candidate_fields` | Structuring LLM call to produce JSON fields |
+| `validate_against_schema` | Validate output against `MedicalRecord` Pydantic schema |
 | `normalize_codes` | Normalize ICD codes, diagnosis punctuation, medication casing |
 | `retrieve_context` | Load SQLite history + Qdrant vector context |
 | `merge_document_record` | Reasoning LLM call with combined context |
-| `confidence_gate` | Compute confidence score; route to human_review if low |
-| `human_review` | Flag document for manual review (passthrough in automated path) |
-| `persist_record` | Index document to vector store |
+| `confidence_gate` | Score confidence; route to human review if below threshold |
+| `human_review` | Flag for manual review (passthrough in automated path) |
+| `persist_record` | Index document chunks to the vector store |
 
-The graph uses a typed `ExtractionGraphState` TypedDict so every intermediate value
-is visible for inspection, replay, or debugging.
+### Agentic Workflow
 
-### First-gen workflow (`backend/workflows/agentic_extraction.py`)
+First-generation LangGraph implementation with coarser composite nodes. Available for backward compatibility.
 
-An earlier coarser-grained workflow. Uses larger composite nodes. Still available via "Agentic workflow" UI option.
+## OCR Backends
 
-Both workflows support the same split OCR / structuring / reasoning configuration.
+All backends produce a unified `OCRResult` with per-page text, optional markdown, structured output, and bounding boxes.
 
-### API parameter
+| Backend | Engine | Bounding Boxes | Prompt Modes |
+|---|---|---|---|
+| DeepSeek-OCR | Ollama | — | text |
+| GLM-OCR | Ollama | — | text · table · figure · formula · chart |
+| PaddleOCR-VL (local) | PaddlePaddle | Yes | — |
+| PaddleOCR-VL (service) | HTTP client | Yes | — |
 
-| `POST /analyze` parameter | Value | Behavior |
+## Semantic Retrieval
+
+Documents are chunked, embedded (Ollama `nomic-embed-text`), and indexed into Qdrant with metadata:
+
+| Field | Purpose |
+|---|---|
+| `patient_id_hash` | SHA-256 of MRN for deterministic, privacy-preserving lookup |
+| `source_type` | `medical_record` or `insurance_policy` |
+| `encounter_date` | Temporal filtering |
+| `page_number` | Page-level provenance |
+| `ocr_backend` | Lineage tracking |
+
+Vector search is **additive context**, not a replacement for the relational SQLite history lookup. Exact metadata filters are applied before similarity scoring.
+
+## API Reference
+
+| Endpoint | Method | Description |
 |---|---|---|
-| `extraction_graph_mode=true` | true | Runs granular extraction graph |
-| `agentic_mode=true` | true | Runs first-gen workflow |
-| both false | – | Runs direct single-call pipeline |
+| `/analyze` | POST | Process a medical document through the selected extraction workflow |
+| `/check_insurance` | POST | Compare extracted diagnoses against an insurance policy |
+| `/confirm` | POST | Persist a confirmed medical record to SQLite |
 
-## Frontend Behavior
+### `POST /analyze`
 
-The Streamlit app now exposes:
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `file` | file | *required* | Medical document (PDF, JPG, PNG) |
+| `ocr_backend` | string | `ollama` | OCR engine: `ollama`, `glm`, `paddle` |
+| `ocr_mode` | string | `text` | Prompt mode (GLM only) |
+| `structuring_provider` | string | `null` | Provider for the structuring LLM |
+| `structuring_model` | string | `null` | Model for the structuring LLM |
+| `reasoning_provider` | string | `null` | Provider for the reasoning LLM |
+| `reasoning_model` | string | `null` | Model for the reasoning LLM |
+| `extraction_graph_mode` | bool | `false` | Enable 12-node granular extraction graph |
+| `agentic_mode` | bool | `false` | Enable first-gen agentic workflow |
+| `use_gpu` | bool | `true` | GPU acceleration for PaddleOCR-VL |
+| `paddle_service_url` | string | `null` | Endpoint for PaddleOCR-VL service mode |
 
-- **OCR backend and mode**: select DeepSeek-OCR, GLM-OCR, PaddleOCR-VL (local Python or service).
-- **Extraction workflow**: radio selector between Direct pipeline, Granular extraction graph, and Agentic workflow.
-- **Structuring provider/model**: separate provider + model for the structuring LLM.
-- **Reasoning provider/model**: separate provider + model for clinical reasoning.
+> Full parameter reference and response schema in [USAGE.md](USAGE.md#api-reference).
 
-The document review area supports:
+### `POST /check_insurance`
 
-- Original artifact preview (PDF inline or image)
-- Annotated artifact preview (bounding boxes drawn over page images)
-- Page-by-page original vs annotated overlay comparison
-- Artifact downloads (original and annotated PDF)
-- Bounding box table (page number, polygon, label, confidence)
+Accepts `policy_file` (TXT or PDF) and `medical_json` (serialized extraction output). Set `policy_ocr=true` to OCR a PDF policy before reasoning. Supports the same provider/model split as `/analyze`.
 
-## Setup
+### `POST /confirm`
 
-### Base requirements
-
-```bash
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-Base install includes FastAPI, Streamlit, Ollama client, LangGraph, Qdrant client, Pillow, and test dependencies.
-
-### PDF prerequisites
-
-`pdf2image` requires Poppler to be installed and available on the host.
-
-### Optional Qdrant setup
-
-Set one of the following:
-
-- `QDRANT_ENABLED=true`
-- `QDRANT_URL=http://localhost:6333`
-
-Optional:
-
-- `QDRANT_API_KEY`
-- `VECTOR_STORE=qdrant`
-- `OLLAMA_EMBED_MODEL=nomic-embed-text`
-
-### Optional PaddleOCR-VL setup
-
-PaddleOCR-VL is intentionally optional because it has heavier runtime requirements.
-
-For local Python mode, install PaddleOCR-VL support:
-
-```bash
-python -m pip install "paddleocr[doc-parser]"
-```
-
-For Windows GPU mode, install a compatible PaddlePaddle GPU wheel for your Python and CUDA combination. The code will use:
-
-- local Python mode when `ocr_backend=paddle` and no service URL is provided
-- local service mode when `ocr_backend=paddle` and `paddle_service_url` is set
-
-### Optional Paddle service mode
-
-Run a compatible local service and point the UI or API at it with `paddle_service_url`, for example:
-
-```text
-http://127.0.0.1:8118/v1
-```
-
-## Running the App
-
-Start the backend:
-
-```bash
-python -m uvicorn backend.main:app --reload --port 8000
-```
-
-Start the frontend in a second terminal:
-
-```bash
-streamlit run frontend/app.py
-```
+Accepts a JSON body conforming to the `MedicalRecord` schema. Writes the confirmed record to SQLite.
 
 ## Testing
 
-Run the full test suite:
-
 ```bash
-python -m pytest
+python -m pytest                  # Full suite with coverage (131 tests, 76% coverage)
+python -m pytest tests/unit/      # Unit tests only
+python -m pytest tests/integration/ # Integration tests only
+python -m pytest -k "extraction_graph" -v  # Filtered run
 ```
 
-Focused validation examples:
+| Test Module | Count | Coverage Area |
+|---|---|---|
+| `test_extraction_graph.py` | 34 | All 12 graph nodes, confidence routing, error passthrough |
+| `test_ocr_backends.py` | 32 | Config normalization, prompts, multi-page, bbox, annotations |
+| `test_retrieval.py` | 22 | Chunking, hashing, embeddings, payloads, policy context |
+| `test_api_workflows.py` | 11 | All 3 workflow modes, OCR backend selection, policy OCR |
+| `test_main_unit.py` | 12 | Endpoint routing, error handling, form parameter parsing |
+| `test_extract.py` | 8 | Direct pipeline OCR + structuring |
+| `test_logic.py` | 5 | Clinical reasoning and insurance logic |
+| `test_ai_wrapper.py` | 4 | Provider adapter dispatch |
+| `test_database.py` | 2 | SQLite read/write |
+| `test_models.py` | 1 | Pydantic schema validation |
 
-```bash
-python -m pytest tests/unit/test_extract.py
-python -m pytest tests/unit/test_logic.py tests/unit/test_main_unit.py tests/integration/test_api_workflows.py
-```
+## Configuration
 
-## Current Limitations
+| Variable | Default | Description |
+|---|---|---|
+| `QDRANT_URL` | — | Qdrant server endpoint |
+| `QDRANT_ENABLED` | `false` | Enable semantic retrieval |
+| `QDRANT_API_KEY` | — | Qdrant authentication key |
+| `VECTOR_STORE` | `qdrant` | Active vector store backend |
+| `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Embedding model for document indexing |
 
-- Qdrant is the only live retrieval backend. `backend/retrieval/pgvector_store.py` is a scaffold, not a production path yet.
-- Ollama OCR backends do not emit native bounding boxes, so overlays are empty for Ollama/GLM paths.
-- SQLite history returns the latest prior record by MRN, not a full longitudinal timeline.
-- PaddleOCR-VL runtime setup requires compatible Paddle packages and, for GPU, a matching Paddle GPU wheel.
-- The API has no authentication or authorization and CORS is fully open.
-- Binary/non-UTF8 policy documents are not OCR-processed in the `/check_insurance` endpoint without enabling `policy_ocr=true`.
-- No explicit retry/backoff mechanism for provider/API failures.
-- LangGraph `human_review` node is a passthrough in the automated path; production deployments should emit a task/ticket there.
+## Known Limitations
 
-## Future Improvements (code-implied)
+- **Bounding boxes** — Ollama-based OCR backends (GLM, DeepSeek) do not emit native bounding boxes; overlay tabs are empty for those paths.
+- **Patient history** — SQLite returns the latest prior record per MRN, not a full longitudinal timeline.
+- **Authentication** — The API has no auth layer and CORS is fully open. Not suitable for production without hardening.
+- **Human review** — The `human_review` graph node is a passthrough; production deployments should wire it to a ticketing system.
+- **pgvector** — Scaffolded but not live. Qdrant is the only active retrieval backend.
+- **Retry/backoff** — No automatic retry mechanism for LLM provider failures.
 
-The following are direct extensions of current constraints:
+## Roadmap
 
-- Wire pgvector as a live retrieval backend (schema, adapter, and migration).
-- Add a real human-review pause point in `human_review` node (emit ticket/task, await callback).
-- Add provider/model selection support to `/check_insurance` in a dedicated UI panel.
-- Introduce request-body Pydantic models on API endpoints for stronger schema validation.
-- Tighten CORS and add authentication for non-local deployments.
-- Add ICD-10 code normalization via a lookup table in `normalize_codes_node`.
-- Add longitudinal history view (full timeline per MRN) rather than latest-record-only.
+- [ ] Wire pgvector as a live retrieval backend with schema migration
+- [ ] Implement human-review pause point with external task/ticket emission
+- [ ] Add ICD-10 code normalization via lookup table
+- [ ] Introduce request-body Pydantic models for stronger API schema validation
+- [ ] Add longitudinal patient history view (full timeline per MRN)
+- [ ] Tighten CORS and add authentication for non-local deployments
+- [ ] Add provider retry/backoff with configurable policies
+
+## License
+
+This project is provided as-is for research and development purposes.
+
+---
+
+<div align="center">
+
+Built with [FastAPI](https://fastapi.tiangolo.com) · [Streamlit](https://streamlit.io) · [LangGraph](https://langchain-ai.github.io/langgraph/) · [Qdrant](https://qdrant.tech) · [Ollama](https://ollama.com)
+
+</div>
 
 ## Project Structure
 
