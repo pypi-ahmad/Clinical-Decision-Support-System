@@ -245,12 +245,12 @@ python -m pytest -k "extraction_graph" -v  # Filtered run
 | `test_ocr_backends.py` | 32 | Config normalization, prompts, multi-page, bbox, annotations |
 | `test_retrieval.py` | 22 | Chunking, hashing, embeddings, payloads, policy context |
 | `test_api_workflows.py` | 11 | All 3 workflow modes, OCR backend selection, policy OCR |
-| `test_main_unit.py` | 12 | Endpoint routing, error handling, form parameter parsing |
-| `test_extract.py` | 8 | Direct pipeline OCR + structuring |
-| `test_logic.py` | 5 | Clinical reasoning and insurance logic |
-| `test_ai_wrapper.py` | 4 | Provider adapter dispatch |
-| `test_database.py` | 2 | SQLite read/write |
-| `test_models.py` | 1 | Pydantic schema validation |
+| `test_main_unit.py` | 8 | Endpoint routing, error handling, form parameter parsing |
+| `test_ai_wrapper.py` | 7 | Provider adapter dispatch |
+| `test_extract.py` | 6 | Direct pipeline OCR + structuring |
+| `test_database.py` | 5 | SQLite read/write |
+| `test_logic.py` | 4 | Clinical reasoning and insurance logic |
+| `test_models.py` | 2 | Pydantic schema validation |
 
 ## Configuration
 
