@@ -10,7 +10,12 @@ streamlit-pdf-viewer
 streamlit
 pandas
 requests
+Pillow
 pdf2image
 openai
 anthropic
 google-genai
+langgraph
+qdrant-client
+pytest
+pytest-cov

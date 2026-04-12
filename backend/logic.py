@@ -45,7 +45,14 @@ Output JSON:
 }
 """
 
-def analyze_medical_logic(current_data, past_data, provider="Ollama", model="lfm2.5-thinking", api_key=None):
+def analyze_medical_logic(
+    current_data,
+    past_data,
+    provider="Ollama",
+    model="lfm2.5-thinking",
+    api_key=None,
+    retrieved_context=None,
+):
     """
     Performs Clinical Decision Support analysis.
 
@@ -65,6 +72,9 @@ def analyze_medical_logic(current_data, past_data, provider="Ollama", model="lfm
     else:
         context = f"CURRENT_DATA: {json.dumps(current_data)}\nPAST_DATA: {json.dumps(past_data)}"
 
+    if retrieved_context:
+        context = f"{context}\nRETRIEVED_CONTEXT: {json.dumps(retrieved_context)}"
+
     print(f"🧠 Analyzing Logic with {provider}...")
     
     try:
@@ -75,7 +85,15 @@ def analyze_medical_logic(current_data, past_data, provider="Ollama", model="lfm
     except Exception:
         return {"summary": "Analysis failed", "alerts": [], "trends": []}
 
-def check_insurance_coverage(medical_data, policy_text, provider="Ollama", model="glm-4.7-flash", api_key=None):
+
+def check_insurance_coverage(
+    medical_data,
+    policy_text,
+    provider="Ollama",
+    model="glm-4.7-flash",
+    api_key=None,
+    relevant_policy_chunks=None,
+):
     """
     Checks if the patient's medical data matches the insurance policy criteria.
 
@@ -95,6 +113,7 @@ def check_insurance_coverage(medical_data, policy_text, provider="Ollama", model
     prompt = f"""
     MEDICAL_DATA: {json.dumps(medical_data)}
     INSURANCE_POLICY_TEXT: {policy_text[:4000]} (Truncated for context window)
+    RETRIEVED_POLICY_CONTEXT: {json.dumps(relevant_policy_chunks or [])}
     
     {INSURANCE_PROMPT}
     """

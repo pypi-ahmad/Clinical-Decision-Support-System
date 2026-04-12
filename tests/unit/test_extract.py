@@ -97,3 +97,33 @@ def test_process_document_pipeline_structuring_failure_returns_raw_text(monkeypa
     assert "error" in result
     assert "Structuring failed" in result["error"]
     assert "raw_text" not in result
+
+
+def test_run_document_ocr_returns_multi_page_payload(monkeypatch, tmp_path):
+    """Targets backend.extract.run_document_ocr multi-page OCR contract."""
+    from unittest.mock import MagicMock
+
+    pdf_file = tmp_path / "multipage.pdf"
+    pdf_file.write_bytes(b"%PDF")
+
+    mock_page_one = MagicMock()
+    mock_page_two = MagicMock()
+    monkeypatch.setattr(extract, "convert_from_path", lambda path, **kwargs: [mock_page_one, mock_page_two])
+
+    responses = iter([
+        {"message": {"content": "page one text"}},
+        {"message": {"content": "page two text"}},
+    ])
+    monkeypatch.setattr(
+        extract,
+        "ollama",
+        type("DummyOllama", (), {"chat": staticmethod(lambda **kwargs: next(responses))}),
+    )
+
+    result = extract.run_document_ocr(str(pdf_file), ocr_backend="glm", ocr_model="glm-ocr")
+
+    assert "error" not in result
+    assert len(result["per_page_results"]) == 2
+    assert result["annotations_metadata"]["page_count"] == 2
+    assert "PAGE 1" in result["raw_text"]
+    assert "PAGE 2" in result["raw_text"]

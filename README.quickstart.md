@@ -1,57 +1,68 @@
 # MediScan OCR — Quickstart
 
-Concise guide for running the current implementation locally.
+Short path for running the current implementation locally.
 
-## What it is
+## What you get
 
-MediScan OCR is a local web app with:
-- FastAPI backend (`/analyze`, `/check_insurance`, `/confirm`)
-- Streamlit frontend for upload, review, insights, and insurance check
-- SQLite persistence for confirmed records and history lookup
+- FastAPI backend with `/analyze`, `/check_insurance`, and `/confirm`
+- Streamlit frontend with OCR selection, review, overlays, downloads, and insurance checks
+- SQLite persistence
+- Optional LangGraph extraction mode
+- Optional Qdrant retrieval
 
-## Stack (implemented)
-
-- Backend: FastAPI + Uvicorn
-- Frontend: Streamlit
-- OCR: Ollama `deepseek-ocr` in extraction pipeline
-- LLM adapter: Ollama, OpenAI, Gemini, Anthropic
-- Database: SQLite (`backend/medical_records.db`)
-
-## Local setup (Windows)
-
-### 1) Create and activate venv
+## 1. Create and activate a virtual environment
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-### 2) Install dependencies
+## 2. Install base dependencies
 
 ```bash
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-### 3) Run backend
+If you want PaddleOCR-VL local Python mode, also install:
+
+```bash
+python -m pip install "paddleocr[doc-parser]"
+```
+
+## 3. Ensure local prerequisites
+
+- Install Poppler so `pdf2image` can render PDFs.
+- Start Ollama if you want Ollama OCR or Ollama structuring/reasoning.
+- Start Qdrant if you want semantic retrieval.
+
+Example retrieval env:
+
+```powershell
+$env:QDRANT_URL = "http://localhost:6333"
+$env:QDRANT_ENABLED = "true"
+```
+
+## 4. Run the backend
 
 ```bash
 python -m uvicorn backend.main:app --reload --port 8000
 ```
 
-### 4) Run frontend (new terminal)
+## 5. Run the frontend
 
 ```bash
 streamlit run frontend/app.py
 ```
 
-## How to use
+## 6. Use the app
 
-1. In the sidebar, select provider/model and upload a medical PDF/image.
-2. Click **Analyze Document**.
-3. Review/edit extracted JSON in **Extraction & Validation**.
-4. Click **Confirm & Save to Database** to persist the record.
-5. Optionally upload a policy in **Insurance Eligibility** and run eligibility check.
+1. Choose an OCR backend.
+2. Choose structuring and reasoning models separately.
+3. Upload a medical PDF or image.
+4. Review the extracted JSON and overlays.
+5. Save the record if it looks correct.
+6. Optionally upload a policy and run insurance checking.
 
 ## Test command
 
@@ -59,13 +70,10 @@ streamlit run frontend/app.py
 python -m pytest
 ```
 
-## Current constraints
+## Notes
 
-- PDF extraction processes first page only.
-- OCR engine is fixed to Ollama `deepseek-ocr`.
-- Insurance binary files use fallback placeholder text (no OCR path in that endpoint).
-- Frontend preview expects local filesystem access to backend-provided file path.
+- Qdrant is the active retrieval backend.
+- pgvector is scaffolded but not live yet.
+- PaddleOCR-VL requires extra local setup.
 
-## Full technical documentation
-
-See `README.md` for architecture, full flow, module-level breakdowns, and limitations.
+See `README.md` for the full architecture and API details.

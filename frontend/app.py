@@ -18,6 +18,12 @@ import pandas as pd
 from streamlit_pdf_viewer import pdf_viewer
 
 API_URL = "http://localhost:8000"
+PROVIDER_MODELS = {
+    "Ollama": ["glm-4.7-flash", "lfm2.5-thinking", "llama3"],
+    "OpenAI": ["gpt-4o", "gpt-3.5-turbo", "gpt-4-turbo"],
+    "Anthropic": ["claude-3-5-sonnet-20240620", "claude-3-opus-20240229"],
+    "Gemini": ["gemini-1.5-pro", "gemini-1.5-flash"],
+}
 
 st.set_page_config(page_title="MediScan AI", layout="wide", page_icon="🏥")
 
@@ -29,6 +35,76 @@ if 'analysis' not in st.session_state:
     st.session_state['analysis'] = None
 if 'pdf_path' not in st.session_state:
     st.session_state['pdf_path'] = None
+if 'file_url' not in st.session_state:
+    st.session_state['file_url'] = None
+if 'ocr_artifacts' not in st.session_state:
+    st.session_state['ocr_artifacts'] = None
+if 'annotated_pdf_path' not in st.session_state:
+    st.session_state['annotated_pdf_path'] = None
+if 'annotated_pdf_url' not in st.session_state:
+    st.session_state['annotated_pdf_url'] = None
+if 'annotated_image_paths' not in st.session_state:
+    st.session_state['annotated_image_paths'] = []
+if 'annotated_image_urls' not in st.session_state:
+    st.session_state['annotated_image_urls'] = []
+if 'page_image_urls' not in st.session_state:
+    st.session_state['page_image_urls'] = []
+if 'bounding_boxes' not in st.session_state:
+    st.session_state['bounding_boxes'] = []
+if 'requires_human_review' not in st.session_state:
+    st.session_state['requires_human_review'] = False
+if 'vector_index_status' not in st.session_state:
+    st.session_state['vector_index_status'] = None
+
+
+def render_model_config(title: str, key_prefix: str, default_provider: str = "Ollama"):
+    st.subheader(title)
+    provider = st.selectbox(
+        f"{title} Provider",
+        list(PROVIDER_MODELS.keys()),
+        index=list(PROVIDER_MODELS.keys()).index(default_provider),
+        key=f"{key_prefix}_provider",
+    )
+    model_options = PROVIDER_MODELS[provider]
+    api_key = None
+    if provider != "Ollama":
+        api_key = st.text_input(f"{title} API Key", type="password", key=f"{key_prefix}_api_key")
+    model = st.selectbox(f"{title} Model", model_options, key=f"{key_prefix}_model")
+    return provider, model, api_key
+
+
+def artifact_url(path: str | None) -> str | None:
+    if not path:
+        return None
+    if path.startswith("http://") or path.startswith("https://"):
+        return path
+    return f"{API_URL}{path}"
+
+
+def fetch_artifact_bytes(path: str | None) -> bytes | None:
+    url = artifact_url(path)
+    if not url:
+        return None
+    try:
+        response = requests.get(url, timeout=60)
+        response.raise_for_status()
+        return response.content
+    except Exception:
+        return None
+
+
+def render_pdf_preview(path: str | None, height: int = 800):
+    content = fetch_artifact_bytes(path)
+    if content:
+        pdf_viewer(input=content, width=700, height=height)
+    else:
+        st.warning("Could not load PDF preview.")
+
+
+def render_download_button(label: str, path: str | None, file_name: str, mime: str):
+    content = fetch_artifact_bytes(path)
+    if content:
+        st.download_button(label, data=content, file_name=file_name, mime=mime, use_container_width=True)
 
 # --- Header ---
 st.title("🏥 MediScan: AI Medical Record Digitizer")
@@ -36,38 +112,69 @@ st.title("🏥 MediScan: AI Medical Record Digitizer")
 # --- Sidebar (Configuration & Upload) ---
 with st.sidebar:
     st.header("⚙️ AI Configuration")
-    
-    # 1. Select Provider (Universal Adapter)
-    provider = st.selectbox("Select Model Provider", ["Ollama", "OpenAI", "Anthropic", "Gemini"])
-    
-    # 2. Dynamic Model Options based on Provider
-    model_options = []
-    api_key = None
-    
-    if provider == "Ollama":
-        model_options = ["glm-4.7-flash", "lfm2.5-thinking", "llama3"]
-    elif provider == "OpenAI":
-        api_key = st.text_input("OpenAI API Key", type="password")
-        model_options = ["gpt-4o", "gpt-3.5-turbo", "gpt-4-turbo"]
-    elif provider == "Anthropic":
-        api_key = st.text_input("Anthropic API Key", type="password")
-        model_options = ["claude-3-5-sonnet-20240620", "claude-3-opus-20240229"]
-    elif provider == "Gemini":
-        api_key = st.text_input("Gemini API Key", type="password")
-        model_options = ["gemini-1.5-pro", "gemini-1.5-flash"]
-        
-    selected_model = st.selectbox("Select Model", model_options)
+
+    ocr_backend_option = st.selectbox(
+        "OCR Backend",
+        [
+            "DeepSeek-OCR (Ollama)",
+            "GLM-OCR (Ollama)",
+            "PaddleOCR-VL-1.5 (Local Python)",
+            "PaddleOCR-VL-1.5 (Local Service)",
+        ],
+    )
+    ocr_prompt_mode = st.selectbox(
+        "OCR Mode",
+        ["text", "ocr", "table", "formula", "chart", "spotting", "seal"],
+        index=0,
+    )
+    use_gpu = st.checkbox("Use local GPU/CUDA", value=True)
+    agentic_mode = st.checkbox("Use LangGraph agentic extraction", value=True)
+
+    ocr_backend = "ollama"
+    ocr_model = "deepseek-ocr"
+    paddle_service_url = None
+    if ocr_backend_option == "GLM-OCR (Ollama)":
+        ocr_backend = "glm"
+        ocr_model = "glm-ocr"
+    elif ocr_backend_option == "PaddleOCR-VL-1.5 (Local Python)":
+        ocr_backend = "paddle"
+        ocr_model = "PaddlePaddle/PaddleOCR-VL-1.5"
+    elif ocr_backend_option == "PaddleOCR-VL-1.5 (Local Service)":
+        ocr_backend = "paddle"
+        ocr_model = "PaddlePaddle/PaddleOCR-VL-1.5"
+        paddle_service_url = st.text_input("PaddleOCR-VL Service URL", value="http://127.0.0.1:8118/v1")
+
+    structuring_provider, structuring_model, structuring_api_key = render_model_config(
+        "Structuring",
+        "structuring",
+    )
+    reasoning_provider, reasoning_model, reasoning_api_key = render_model_config(
+        "Reasoning",
+        "reasoning",
+    )
 
     st.header("Upload Medical Record")
     uploaded_file = st.file_uploader("Upload PDF/Image", type=["pdf", "jpg", "png"])
     
     if uploaded_file and st.button("🚀 Analyze Document"):
-        with st.spinner(f"Running Analysis with {provider} ({selected_model})..."):
+        with st.spinner(f"Running Analysis with {structuring_provider} ({structuring_model}) and {reasoning_provider} ({reasoning_model})..."):
             files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
             data = {
-                "provider": provider, 
-                "model": selected_model, 
-                "api_key": api_key if api_key else ""
+                "provider": structuring_provider,
+                "model": structuring_model,
+                "api_key": structuring_api_key if structuring_api_key else "",
+                "structuring_provider": structuring_provider,
+                "structuring_model": structuring_model,
+                "structuring_api_key": structuring_api_key if structuring_api_key else "",
+                "reasoning_provider": reasoning_provider,
+                "reasoning_model": reasoning_model,
+                "reasoning_api_key": reasoning_api_key if reasoning_api_key else "",
+                "ocr_backend": ocr_backend,
+                "ocr_model": ocr_model,
+                "ocr_mode": ocr_prompt_mode,
+                "use_gpu": str(use_gpu).lower(),
+                "paddle_service_url": paddle_service_url if paddle_service_url else "",
+                "agentic_mode": str(agentic_mode).lower(),
             }
             try:
                 # Call Backend API
@@ -77,7 +184,17 @@ with st.sidebar:
                     # Update Session State
                     st.session_state['extracted_data'] = data['extracted']
                     st.session_state['analysis'] = data['analysis']
-                    st.session_state['pdf_path'] = data.get('file_path') 
+                    st.session_state['pdf_path'] = data.get('file_path')
+                    st.session_state['file_url'] = data.get('file_url')
+                    st.session_state['ocr_artifacts'] = data.get('ocr')
+                    st.session_state['annotated_pdf_path'] = data.get('annotated_pdf_path')
+                    st.session_state['annotated_pdf_url'] = data.get('annotated_pdf_url')
+                    st.session_state['annotated_image_paths'] = data.get('annotated_image_paths', [])
+                    st.session_state['annotated_image_urls'] = data.get('annotated_image_urls', [])
+                    st.session_state['page_image_urls'] = data.get('page_image_urls', [])
+                    st.session_state['bounding_boxes'] = data.get('bounding_boxes', [])
+                    st.session_state['requires_human_review'] = data.get('requires_human_review', False)
+                    st.session_state['vector_index_status'] = data.get('vector_index_status')
                     st.success("Analysis Complete!")
                 else:
                     st.error(f"Error: {response.text}")
@@ -95,22 +212,68 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # === TAB 1: EXTRACTION & VALIDATION ===
 with tab1:
     if st.session_state['extracted_data']:
+        if st.session_state['requires_human_review']:
+            st.warning("This document passed through the agentic validation gate and should receive human review before operational use.")
+
         col1, col2 = st.columns([1, 1])
         
         with col1:
-            st.subheader("📄 Original Document")
-            # Display PDF/Image Preview
-            if st.session_state['pdf_path']:
-                if st.session_state['pdf_path'].endswith('.pdf'):
-                    # Read the file from backend path (assuming local dev environment for simplicity)
-                    try:
-                        with open(st.session_state['pdf_path'], "rb") as f:
-                            pdf_bytes = f.read()
-                        pdf_viewer(input=pdf_bytes, width=700, height=800)
-                    except Exception:
-                        st.warning("Could not load PDF preview.")
+            doc_tabs = st.tabs(["📄 Original", "🖍️ Annotated", "🔎 Overlay", "📦 Bounding Boxes"])
+            with doc_tabs[0]:
+                st.subheader("Original Document")
+                if st.session_state['file_url']:
+                    if str(st.session_state['file_url']).endswith('.pdf'):
+                        render_pdf_preview(st.session_state['file_url'])
+                    else:
+                        page_urls = st.session_state.get('page_image_urls') or [st.session_state['file_url']]
+                        for page_url in page_urls:
+                            st.image(artifact_url(page_url), use_container_width=True)
+                    render_download_button("Download Original", st.session_state['file_url'], "original_document", "application/pdf")
+
+            with doc_tabs[1]:
+                st.subheader("Annotated Output")
+                if st.session_state['annotated_pdf_url']:
+                    render_pdf_preview(st.session_state['annotated_pdf_url'])
+                    render_download_button(
+                        "Download Annotated PDF",
+                        st.session_state['annotated_pdf_url'],
+                        "annotated_document.pdf",
+                        "application/pdf",
+                    )
+                elif st.session_state['annotated_image_urls']:
+                    for annotated_url in st.session_state['annotated_image_urls']:
+                        st.image(artifact_url(annotated_url), use_container_width=True)
                 else:
-                    st.image(st.session_state['pdf_path'])
+                    st.info("No annotated output is available for this OCR backend yet.")
+
+            with doc_tabs[2]:
+                st.subheader("Original vs Annotated")
+                original_urls = st.session_state.get('page_image_urls') or []
+                annotated_urls = st.session_state.get('annotated_image_urls') or []
+                if original_urls and annotated_urls:
+                    page_count = min(len(original_urls), len(annotated_urls))
+                    selected_page = st.selectbox(
+                        "Page",
+                        list(range(1, page_count + 1)),
+                        format_func=lambda page: f"Page {page}",
+                    )
+                    overlay_left, overlay_right = st.columns(2)
+                    with overlay_left:
+                        st.caption("Original")
+                        st.image(artifact_url(original_urls[selected_page - 1]), use_container_width=True)
+                    with overlay_right:
+                        st.caption("Annotated")
+                        st.image(artifact_url(annotated_urls[selected_page - 1]), use_container_width=True)
+                else:
+                    st.info("Overlay preview is available when both rendered pages and annotated pages exist.")
+
+            with doc_tabs[3]:
+                st.subheader("Bounding Boxes")
+                bounding_boxes = st.session_state['bounding_boxes'] or []
+                if bounding_boxes:
+                    st.dataframe(pd.DataFrame(bounding_boxes), use_container_width=True)
+                else:
+                    st.info("No bounding boxes were returned for this OCR backend.")
         
         with col2:
             st.subheader("✏️ Data Editor (Fix OCR Errors)")
@@ -132,6 +295,25 @@ with tab1:
                         st.error(f"Save failed: {save_response.text}")
                 except Exception as e:
                     st.error(f"Save Error: {e}")
+
+            vector_index_status = st.session_state.get('vector_index_status')
+            if vector_index_status:
+                st.divider()
+                st.subheader("🧠 Retrieval Index")
+                st.json(vector_index_status)
+
+            if st.session_state.get('ocr_artifacts'):
+                st.divider()
+                st.subheader("OCR Metadata")
+                st.json(
+                    {
+                        "backend": st.session_state['ocr_artifacts'].get('backend'),
+                        "model": st.session_state['ocr_artifacts'].get('model'),
+                        "ocr_mode": st.session_state['ocr_artifacts'].get('ocr_mode'),
+                        "pages": len(st.session_state['ocr_artifacts'].get('per_page_results', [])),
+                        "annotations": st.session_state['ocr_artifacts'].get('annotations_metadata', {}),
+                    }
+                )
 
     else:
         st.info("Please upload a document in the sidebar to begin.")
@@ -209,9 +391,23 @@ with tab4:
     if policy_file and st.session_state['extracted_data']:
         if st.button("Check Eligibility"):
             with st.spinner("Comparing Policy vs Diagnosis..."):
-                files = {"policy_file": policy_file}
+                files = {"policy_file": (policy_file.name, policy_file.getvalue(), policy_file.type)}
                 # Send the extracted medical data as a JSON string field
-                payload = {"medical_json": json.dumps(st.session_state['extracted_data'])}
+                payload = {
+                    "medical_json": json.dumps(st.session_state['extracted_data']),
+                    "provider": reasoning_provider,
+                    "model": reasoning_model,
+                    "api_key": reasoning_api_key if reasoning_api_key else "",
+                    "reasoning_provider": reasoning_provider,
+                    "reasoning_model": reasoning_model,
+                    "reasoning_api_key": reasoning_api_key if reasoning_api_key else "",
+                    "ocr_backend": ocr_backend,
+                    "ocr_model": ocr_model,
+                    "ocr_mode": ocr_prompt_mode,
+                    "use_gpu": str(use_gpu).lower(),
+                    "paddle_service_url": paddle_service_url if paddle_service_url else "",
+                    "policy_ocr": str(policy_file.type != "text/plain").lower(),
+                }
                 
                 try:
                     res = requests.post(f"{API_URL}/check_insurance", files=files, data=payload, timeout=60)
