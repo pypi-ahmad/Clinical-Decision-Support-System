@@ -23,6 +23,7 @@ from backend.extract import process_document_pipeline, run_document_ocr
 from backend.logic import analyze_medical_logic, check_insurance_coverage
 from backend.retrieval import build_chunks_from_ocr_payload, build_chunks_from_text, create_vector_store, hash_identifier
 from backend.workflows.agentic_extraction import run_agentic_extraction_workflow
+from backend.workflows.extraction_graph import run_extraction_graph
 
 app = FastAPI()
 
@@ -58,6 +59,7 @@ async def analyze_medical_doc(
     use_gpu: bool = Form(True),
     paddle_service_url: str | None = Form(None),
     agentic_mode: bool = Form(False),
+    extraction_graph_mode: bool = Form(False),
 ):
     """
     Endpoint to process a medical document.
@@ -92,6 +94,7 @@ async def analyze_medical_doc(
     use_gpu = _coerce_bool(_resolve_form_value(use_gpu, True))
     paddle_service_url = _resolve_form_value(paddle_service_url)
     agentic_mode = _coerce_bool(_resolve_form_value(agentic_mode, False))
+    extraction_graph_mode = _coerce_bool(_resolve_form_value(extraction_graph_mode, False))
 
     # 1. Save File Locally
     safe_filename = os.path.basename(file.filename or "upload.bin")
@@ -101,7 +104,31 @@ async def analyze_medical_doc(
     
     # 2. Extract Data (OCR + Structuring)
     # The Structuring phase will use the selected provider/model
-    if agentic_mode:
+    if extraction_graph_mode:
+        graph_result = run_extraction_graph(
+            file_path=file_path,
+            structuring_provider=structuring_provider,
+            structuring_model=structuring_model,
+            structuring_api_key=structuring_api_key,
+            reasoning_provider=reasoning_provider,
+            reasoning_model=reasoning_model,
+            reasoning_api_key=reasoning_api_key,
+            ocr_backend=ocr_backend,
+            ocr_model=ocr_model,
+            ocr_prompt_mode=ocr_mode,
+            use_gpu=use_gpu,
+            paddle_service_url=paddle_service_url,
+        )
+        if graph_result.get("error"):
+            raise HTTPException(status_code=500, detail={"error": graph_result["error"]})
+
+        current_data = graph_result.get("structured_data") or {}
+        ocr_payload = graph_result.get("ocr") or {}
+        past_data = graph_result.get("past_data")
+        analysis = graph_result.get("analysis") or {"summary": "Analysis failed", "alerts": [], "trends": []}
+        requires_human_review = graph_result.get("requires_human_review", False)
+        vector_index_status = graph_result.get("vector_index_status")
+    elif agentic_mode:
         workflow_result = run_agentic_extraction_workflow(
             file_path=file_path,
             structuring_provider=structuring_provider,

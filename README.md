@@ -28,7 +28,8 @@ The current repository implements:
 - Reasoning and insurance logic: `backend/logic.py`
 - Provider adapter: `backend/ai_wrapper.py`
 - Retrieval package: `backend/retrieval/`
-- Agentic workflow: `backend/workflows/agentic_extraction.py`
+- Granular extraction graph: `backend/workflows/extraction_graph.py`
+- First-gen agentic workflow: `backend/workflows/agentic_extraction.py`
 - Persistence: `backend/database.py`
 
 ```mermaid
@@ -37,14 +38,17 @@ flowchart LR
     UI -->|/check_insurance| API
     UI -->|/confirm| API
 
-    API --> EXT[Extraction\nbackend/extract.py]
-    API --> WF[LangGraph Workflow\nbackend/workflows/agentic_extraction.py]
+    API --> EXT[Direct pipeline\nbackend/extract.py]
+    API --> EG[Extraction graph\nbackend/workflows/extraction_graph.py]
+    API --> WF[Agentic workflow\nbackend/workflows/agentic_extraction.py]
     API --> LOG[Reasoning\nbackend/logic.py]
     API --> RET[Retrieval\nbackend/retrieval]
     API --> DB[SQLite\nbackend/database.py]
 
     EXT --> OCR[OCR Backends\nollama | glm | paddle]
     EXT --> AIW[AI Wrapper\nbackend/ai_wrapper.py]
+    EG --> OCR
+    EG --> AIW
     LOG --> AIW
     RET --> QDR[(Qdrant)]
 ```
@@ -136,33 +140,61 @@ Exact relational filters are preserved. Vector search is additive context, not a
 
 ## Agentic Extraction
 
-`backend/workflows/agentic_extraction.py` now implements a LangGraph workflow with typed state and explicit nodes for:
+The `backend/workflows/` package provides two LangGraph workflow options:
 
-- extraction
-- validation
-- human review gate
-- relational history load
-- retrieval context lookup
-- reasoning
-- indexing
+### Granular extraction graph (`backend/workflows/extraction_graph.py`)
 
-The graph is optional and is controlled by the frontend `Use LangGraph agentic extraction` toggle.
+The default workflow selected from the UI via "Granular extraction graph". Implements the full
+step-by-step graph shape with one node per processing stage:
+
+| Node | Responsibility |
+|---|---|
+| `ingest_document` | Verify file exists and is readable |
+| `classify_document_type` | Heuristically classify doc type from filename |
+| `split_pages` | Pre-stage before OCR (page split happens inside OCR node) |
+| `ocr_per_page` | Run selected OCR backend across all pages |
+| `extract_candidate_fields` | Structuring LLM call to extract JSON fields |
+| `validate_against_schema` | Validate against `MedicalRecord` Pydantic schema |
+| `normalize_codes` | Normalize ICD codes, diagnosis punctuation, medication casing |
+| `retrieve_context` | Load SQLite history + Qdrant vector context |
+| `merge_document_record` | Reasoning LLM call with combined context |
+| `confidence_gate` | Compute confidence score; route to human_review if low |
+| `human_review` | Flag document for manual review (passthrough in automated path) |
+| `persist_record` | Index document to vector store |
+
+The graph uses a typed `ExtractionGraphState` TypedDict so every intermediate value
+is visible for inspection, replay, or debugging.
+
+### First-gen workflow (`backend/workflows/agentic_extraction.py`)
+
+An earlier coarser-grained workflow. Uses larger composite nodes. Still available via "Agentic workflow" UI option.
+
+Both workflows support the same split OCR / structuring / reasoning configuration.
+
+### API parameter
+
+| `POST /analyze` parameter | Value | Behavior |
+|---|---|---|
+| `extraction_graph_mode=true` | true | Runs granular extraction graph |
+| `agentic_mode=true` | true | Runs first-gen workflow |
+| both false | – | Runs direct single-call pipeline |
 
 ## Frontend Behavior
 
-The Streamlit app now exposes separate configuration groups for:
+The Streamlit app now exposes:
 
-- OCR backend and OCR mode
-- Structuring provider/model
-- Reasoning provider/model
+- **OCR backend and mode**: select DeepSeek-OCR, GLM-OCR, PaddleOCR-VL (local Python or service).
+- **Extraction workflow**: radio selector between Direct pipeline, Granular extraction graph, and Agentic workflow.
+- **Structuring provider/model**: separate provider + model for the structuring LLM.
+- **Reasoning provider/model**: separate provider + model for clinical reasoning.
 
 The document review area supports:
 
-- original artifact preview
-- annotated artifact preview
-- page-by-page original vs annotated overlay comparison
-- artifact downloads
-- bounding box table
+- Original artifact preview (PDF inline or image)
+- Annotated artifact preview (bounding boxes drawn over page images)
+- Page-by-page original vs annotated overlay comparison
+- Artifact downloads (original and annotated PDF)
+- Bounding box table (page number, polygon, label, confidence)
 
 ## Setup
 
@@ -247,25 +279,25 @@ python -m pytest tests/unit/test_logic.py tests/unit/test_main_unit.py tests/int
 ## Current Limitations
 
 - Qdrant is the only live retrieval backend. `backend/retrieval/pgvector_store.py` is a scaffold, not a production path yet.
-- Ollama OCR backends do not emit native bounding boxes, so overlays are only as rich as the backend output.
-- SQLite history still returns the latest prior record by MRN, not a full longitudinal timeline.
-- PaddleOCR-VL runtime setup still depends on the local machine having compatible Paddle packages and, for GPU, a matching Paddle GPU wheel.
+- Ollama OCR backends do not emit native bounding boxes, so overlays are empty for Ollama/GLM paths.
+- SQLite history returns the latest prior record by MRN, not a full longitudinal timeline.
+- PaddleOCR-VL runtime setup requires compatible Paddle packages and, for GPU, a matching Paddle GPU wheel.
 - The API has no authentication or authorization and CORS is fully open.
-- PDF processing uses first page only.
-- Binary/non-UTF8 policy documents are not OCR-processed; fallback placeholder text is used.
-- Frontend preview depends on local filesystem access to backend `file_path`.
-- Historical lookup returns latest row sorted by text `date` field.
+- Binary/non-UTF8 policy documents are not OCR-processed in the `/check_insurance` endpoint without enabling `policy_ocr=true`.
 - No explicit retry/backoff mechanism for provider/API failures.
-- No endpoint authentication/authorization.
+- LangGraph `human_review` node is a passthrough in the automated path; production deployments should emit a task/ticket there.
 
-## 13) Future Improvements (code-implied)
+## Future Improvements (code-implied)
 
 The following are direct extensions of current constraints:
-- Add provider/model selection support to `/check_insurance` (similar to `/analyze`).
+
+- Wire pgvector as a live retrieval backend (schema, adapter, and migration).
+- Add a real human-review pause point in `human_review` node (emit ticket/task, await callback).
+- Add provider/model selection support to `/check_insurance` in a dedicated UI panel.
 - Introduce request-body Pydantic models on API endpoints for stronger schema validation.
-- Replace policy binary fallback with actual OCR extraction path.
-- Support multi-page PDF extraction where clinical information spans multiple pages.
 - Tighten CORS and add authentication for non-local deployments.
+- Add ICD-10 code normalization via a lookup table in `normalize_codes_node`.
+- Add longitudinal history view (full timeline per MRN) rather than latest-record-only.
 
 ## Project Structure
 
@@ -273,18 +305,44 @@ The following are direct extensions of current constraints:
 mediscan-ocr/
 ├─ backend/
 │  ├─ ai_wrapper.py
+│  ├─ artifacts.py
 │  ├─ database.py
 │  ├─ extract.py
 │  ├─ logic.py
 │  ├─ main.py
 │  ├─ models.py
+│  ├─ ocr.py
+│  ├─ ocr_backends/
+│  │  ├─ base.py
+│  │  ├─ ollama_ocr.py
+│  │  ├─ paddleocr_vl.py
+│  │  └─ service_client.py
+│  ├─ retrieval/
+│  │  ├─ chunking.py
+│  │  ├─ embeddings.py
+│  │  ├─ pgvector_store.py
+│  │  ├─ qdrant_store.py
+│  │  └─ vector_store.py
+│  ├─ workflows/
+│  │  ├─ agentic_extraction.py
+│  │  └─ extraction_graph.py
 │  └─ uploads/
 ├─ frontend/
 │  └─ app.py
 ├─ tests/
 │  ├─ integration/
+│  │  └─ test_api_workflows.py
 │  └─ unit/
+│     ├─ test_ai_wrapper.py
+│     ├─ test_database.py
+│     ├─ test_extract.py
+│     ├─ test_extraction_graph.py
+│     ├─ test_logic.py
+│     ├─ test_main_unit.py
+│     ├─ test_models.py
+│     ├─ test_ocr_backends.py
+│     └─ test_retrieval.py
 ├─ pytest.ini
 ├─ requirements.txt
-└─ TEST_REPORT.md
+└─ README.md
 ```

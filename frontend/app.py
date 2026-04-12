@@ -128,7 +128,14 @@ with st.sidebar:
         index=0,
     )
     use_gpu = st.checkbox("Use local GPU/CUDA", value=True)
-    agentic_mode = st.checkbox("Use LangGraph agentic extraction", value=True)
+    workflow_mode = st.radio(
+        "Extraction workflow",
+        ["Direct pipeline", "Granular extraction graph", "Agentic workflow"],
+        index=1,
+        help="Direct: fast single-call pipeline. Granular: step-by-step LangGraph with classify → split → OCR → validate → normalize → retrieve → merge → confidence gate. Agentic: first-gen LangGraph workflow.",
+    )
+    agentic_mode = workflow_mode == "Agentic workflow"
+    extraction_graph_mode = workflow_mode == "Granular extraction graph"
 
     ocr_backend = "ollama"
     ocr_model = "deepseek-ocr"
@@ -175,6 +182,7 @@ with st.sidebar:
                 "use_gpu": str(use_gpu).lower(),
                 "paddle_service_url": paddle_service_url if paddle_service_url else "",
                 "agentic_mode": str(agentic_mode).lower(),
+                "extraction_graph_mode": str(extraction_graph_mode).lower(),
             }
             try:
                 # Call Backend API
