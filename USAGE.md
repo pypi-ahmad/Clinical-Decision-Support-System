@@ -291,11 +291,63 @@ python -m pytest tests/unit/test_extraction_graph.py -v
 | `VECTOR_STORE` | `qdrant` | Active vector store backend |
 | `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Embedding model for vector indexing |
 
+## Verifying Live Prerequisites
+
+Before relying on a feature, confirm the underlying service is reachable. The table below shows how to validate each optional backend.
+
+### Ollama
+
+```bash
+# Verify the server is running and your models are available
+ollama list
+# Expected: lists pulled models (e.g., glm-4.7-flash, deepseek-ocr)
+```
+
+If `ollama list` fails with a connection error, start the server with `ollama serve`.
+
+### PaddleOCR-VL
+
+```python
+# Verify the Python package is importable
+python -c "from paddleocr import PaddleOCRVL; print('PaddleOCR-VL OK')"
+```
+
+If this fails, install with `pip install "paddleocr[doc-parser]"`. For GPU mode, ensure a compatible PaddlePaddle GPU wheel is installed.
+
+For service mode, verify the endpoint is reachable:
+
+```bash
+curl http://127.0.0.1:8118/v1/models
+# Expected: 200 OK with available models
+```
+
+### Qdrant Retrieval
+
+```bash
+# Verify Qdrant is reachable (default port 6333)
+curl http://localhost:6333/collections
+# Expected: 200 OK with a collections list
+```
+
+Then set the environment variables:
+
+```powershell
+$env:QDRANT_URL = "http://localhost:6333"
+$env:QDRANT_ENABLED = "true"
+```
+
+> **Without these variables set and Qdrant healthy, the retrieval path silently no-ops.** The API response includes `retrieval_enabled: false` when retrieval is inactive. The frontend displays a warning banner on the Retrieval Index section.
+
+### Bounding Box Artifacts
+
+The Annotated, Overlay, and Bounding Boxes tabs in the UI only populate when using a PaddleOCR-VL backend (local or service). Ollama-based backends (GLM, DeepSeek) produce text-only OCR output — those tabs will be empty. The API response includes `ocr_supports_bboxes: false` for these backends.
+
 ## Known Limitations
 
-- Ollama OCR backends do not emit native bounding boxes; overlay tabs are empty for GLM and DeepSeek paths.
+- Ollama OCR backends do not emit native bounding boxes; the Annotated, Overlay, and Bounding Boxes tabs are **empty** for GLM and DeepSeek paths. Use PaddleOCR-VL for bbox artifacts.
+- Qdrant retrieval is **disabled by default**. Without `QDRANT_URL` and `QDRANT_ENABLED=true` the retrieval path silently no-ops and contributes zero semantic context.
+- pgvector is scaffolded but not wired for live reads or writes. `is_configured()` always returns `False`.
 - SQLite history returns the latest prior record per MRN, not a full longitudinal timeline.
 - PaddleOCR-VL requires compatible Paddle packages and, for GPU mode, a matching PaddlePaddle GPU wheel.
 - The API has no authentication or authorization; CORS is fully open. Not suitable for production deployment without additional hardening.
 - The `human_review` node in the extraction graph is a passthrough in the automated path; production deployments should wire it to an external task/ticket system.
-- pgvector is scaffolded but not wired for live reads or writes.

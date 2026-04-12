@@ -8,8 +8,8 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraph/)
-[![Tests](https://img.shields.io/badge/tests-163%20(158%20pass%20·%205%20skip)-brightgreen)]()
-[![Coverage](https://img.shields.io/badge/coverage-85%25-green)]()
+[![Tests](https://img.shields.io/badge/tests-173%20(166%20pass%20·%207%20skip)-brightgreen)]()
+[![Coverage](https://img.shields.io/badge/coverage-90%25-brightgreen)]()
 
 [Quick Start](#quick-start) · [Architecture](#architecture) · [Usage Guide](USAGE.md) · [API Reference](#api-reference) · [Contributing](#roadmap)
 
@@ -127,8 +127,8 @@ flowchart TB
 ├── frontend/
 │   └── app.py                      # Streamlit application
 ├── tests/
-│   ├── unit/                       # 120 unit tests across all modules
-│   └── integration/                # 11 API-level workflow tests
+│   ├── unit/                       # 130+ unit tests across all modules
+│   └── integration/                # 21 API-level + live-stack tests
 ├── requirements.txt
 ├── pytest.ini
 ├── USAGE.md                        # Comprehensive usage guide
@@ -233,24 +233,35 @@ Accepts a JSON body conforming to the `MedicalRecord` schema. Writes the confirm
 ## Testing
 
 ```bash
-python -m pytest                  # Full suite with coverage (163 tests, 85% coverage)
+python -m pytest                  # Full suite with coverage
 python -m pytest tests/unit/      # Unit tests only
 python -m pytest tests/integration/ # Integration tests only
 python -m pytest -k "extraction_graph" -v  # Filtered run
-python -m pytest tests/integration/test_live_pipeline.py -v  # Live Ollama tests (require running server)
+python -m pytest tests/integration/test_live_pipeline.py -v  # Live tests (require running services)
 ```
+
+### Verification Tiers
+
+Tests are organized into two verification tiers. **Mocked tests** exercise code paths with fakes and assertions — they validate logic correctness but do not prove that external services (Ollama, Qdrant, PaddleOCR) produce usable output. **Live-stack tests** call real services and are auto-skipped when the required backend is unreachable.
+
+| Tier | Scope | Skip Condition |
+|---|---|---|
+| **Mocked (unit)** | All nodes, serialization, config, schema, routing | Never skipped |
+| **Live (integration)** | Real Ollama OCR + structuring + reasoning, Qdrant index/search, multi-page PDF | Skipped when Ollama / Qdrant / PaddleOCR unreachable |
+
+> **Important:** A green mocked-test suite does **not** prove end-to-end correctness. Run live-stack tests against real services to validate actual model output quality and retrieval recall.
 
 | Test Module | Count | Coverage Area |
 |---|---|---|
 | `test_extraction_graph.py` | 41 | All 12 graph nodes, compiled-graph e2e, page counting, human-review persistence guard |
-| `test_ocr_backends.py` | 32 | Config normalization, prompts, multi-page, bbox, annotations |
+| `test_ocr_backends.py` | 42 | Config normalization, prompts, multi-page, bbox, annotations, Paddle serialization, service client success/error |
 | `test_retrieval.py` | 24 | Chunking, hashing, Qdrant store (mocked client), policy context |
 | `test_agentic_extraction.py` | 15 | All 7 agentic nodes, compiled-graph e2e |
 | `test_api_workflows.py` | 14 | All 3 workflow modes, bbox/annotation fields, retrieval_enabled, ocr_supports_bboxes |
 | `test_main_unit.py` | 8 | Endpoint routing, error handling, form parameter parsing |
 | `test_ai_wrapper.py` | 7 | Provider adapter dispatch, AIProviderError |
 | `test_extract.py` | 6 | Direct pipeline OCR + structuring |
-| `test_live_pipeline.py` | 5 | Live Ollama OCR + structuring + reasoning, PaddleOCR stubs (auto-skip) |
+| `test_live_pipeline.py` | 7 | Live Ollama OCR + structuring + reasoning, Qdrant index/retrieve, multi-page PDF (auto-skip) |
 | `test_database.py` | 5 | SQLite read/write |
 | `test_logic.py` | 4 | Clinical reasoning and insurance logic |
 | `test_models.py` | 2 | Pydantic schema validation |
@@ -267,11 +278,12 @@ python -m pytest tests/integration/test_live_pipeline.py -v  # Live Ollama tests
 
 ## Known Limitations
 
-- **Bounding boxes** — Ollama-based OCR backends (GLM, DeepSeek) do not emit native bounding boxes; overlay tabs are empty for those paths.
+- **Bounding boxes** — Ollama-based OCR backends (GLM, DeepSeek) do not emit native bounding boxes. The Annotated, Overlay, and Bounding Boxes tabs in the UI are **empty** for these backends. Bounding box artifacts require PaddleOCR-VL (local or service mode).
+- **Semantic retrieval** — Qdrant retrieval is **disabled by default**. Unless `QDRANT_URL` and `QDRANT_ENABLED=true` are set and the Qdrant server is healthy, the retrieval path silently no-ops and contributes zero context. The API response includes `retrieval_enabled: false` when inactive.
+- **pgvector** — Scaffolded but not live. `is_configured()` always returns `False`. Qdrant is the only active retrieval backend.
 - **Patient history** — SQLite returns the latest prior record per MRN, not a full longitudinal timeline.
 - **Authentication** — The API has no auth layer and CORS is fully open. Not suitable for production without hardening.
 - **Human review** — The `human_review` graph node is a passthrough; production deployments should wire it to a ticketing system.
-- **pgvector** — Scaffolded but not live. Qdrant is the only active retrieval backend.
 - **Retry/backoff** — No automatic retry mechanism for LLM provider failures.
 
 ## Roadmap

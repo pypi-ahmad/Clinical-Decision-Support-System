@@ -7,10 +7,12 @@ Covers:
 - collect_bounding_boxes polygon parsing
 - annotate_document bounding box rendering
 - build_artifact_manifest URL mapping
-- PaddleOCRVLServiceClient error handling
+- PaddleOCRVLServiceClient error/success handling
+- PaddleOCR-VL serialization helpers
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -422,3 +424,198 @@ def test_service_client_build_pipeline_raises_when_paddle_not_installed():
             client.build_pipeline()
     finally:
         sc_module.PaddleOCRVL = original
+
+
+# ---------------------------------------------------------------------------
+# PaddleOCRVLServiceClient success-path tests
+# ---------------------------------------------------------------------------
+
+
+def test_service_client_healthcheck_success():
+    """Healthcheck succeeds when the first candidate URL returns 200."""
+    settings = PaddleOCRVLServiceSettings(
+        model_name="PaddlePaddle/PaddleOCR-VL-1.5",
+        service_url="http://127.0.0.1:8118/v1",
+        healthcheck_timeout_seconds=2,
+    )
+    client = PaddleOCRVLServiceClient(settings)
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+
+    with patch("backend.ocr_backends.service_client.requests.get", return_value=mock_response) as mock_get:
+        result = client.healthcheck()
+
+    assert result["healthy"] is True
+    assert result["status_code"] == 200
+    mock_get.assert_called_once()
+
+
+def test_service_client_predict_success():
+    """predict() delegates to build_pipeline → pipeline.predict and returns (output, pipeline)."""
+    settings = PaddleOCRVLServiceSettings(
+        model_name="PaddlePaddle/PaddleOCR-VL-1.5",
+        service_url="http://127.0.0.1:8118/v1",
+        request_timeout_seconds=30,
+    )
+    client = PaddleOCRVLServiceClient(settings)
+
+    fake_page = MagicMock()
+    fake_pipeline = MagicMock()
+    fake_pipeline.predict.return_value = iter([fake_page])
+
+    with patch.object(client, "build_pipeline", return_value=fake_pipeline):
+        output, pipeline = client.predict("/tmp/doc.pdf")
+
+    assert output == [fake_page]
+    assert pipeline is fake_pipeline
+    fake_pipeline.predict.assert_called_once_with("/tmp/doc.pdf")
+
+
+# ---------------------------------------------------------------------------
+# PaddleOCR-VL serialization helpers
+# ---------------------------------------------------------------------------
+
+
+def test_serialize_page_results_with_json_and_markdown(tmp_path):
+    """_serialize_page_results produces page results from objects that emit JSON + markdown."""
+    from backend.ocr_backends.paddleocr_vl import _serialize_page_results
+
+    page_data = {"text": "hello", "regions": [{"polygon": [[0, 0], [100, 0], [100, 50], [0, 50]], "label": "text"}]}
+
+    def fake_save_json(save_path):
+        p = Path(save_path) / "result.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(page_data), encoding="utf-8")
+
+    def fake_save_md(save_path):
+        p = Path(save_path) / "result.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("# Result\nhello", encoding="utf-8")
+
+    page_obj = MagicMock()
+    page_obj.save_to_json = fake_save_json
+    page_obj.save_to_markdown = fake_save_md
+
+    artifact_root = str(tmp_path / "artifacts")
+    page_results, payloads, markdowns = _serialize_page_results(
+        [page_obj],
+        [str(tmp_path / "page1.png")],
+        artifact_root,
+    )
+
+    assert len(page_results) == 1
+    assert page_results[0].page_number == 1
+    assert payloads[0] == page_data
+    assert "hello" in markdowns[0]
+
+
+def test_serialize_page_results_empty_object(tmp_path):
+    """_serialize_page_results handles objects that have no save methods gracefully."""
+    from backend.ocr_backends.paddleocr_vl import _serialize_page_results
+
+    page_obj = MagicMock(spec=[])  # no save_to_json / save_to_markdown
+
+    page_results, payloads, markdowns = _serialize_page_results(
+        [page_obj],
+        [],
+        str(tmp_path / "artifacts"),
+    )
+
+    assert len(page_results) == 1
+    assert payloads[0] == {}
+    assert markdowns == []
+
+
+def test_save_result_payloads_reads_written_files(tmp_path):
+    """_save_result_payloads calls save_to_json/save_to_markdown and reads back the files."""
+    from backend.ocr_backends.paddleocr_vl import _save_result_payloads
+
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    payload_data = {"key": "value"}
+
+    def fake_save_json(save_path):
+        p = Path(save_path) / "out.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(payload_data), encoding="utf-8")
+
+    def fake_save_md(save_path):
+        p = Path(save_path) / "out.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("markdown content", encoding="utf-8")
+
+    obj = MagicMock()
+    obj.save_to_json = fake_save_json
+    obj.save_to_markdown = fake_save_md
+
+    json_payload, md_text = _save_result_payloads(obj, output_dir)
+
+    assert json_payload == payload_data
+    assert md_text == "markdown content"
+
+
+def test_serialize_merged_results_with_restructure(tmp_path):
+    """_serialize_merged_results calls pipeline.restructure_pages and serializes output."""
+    from backend.ocr_backends.paddleocr_vl import _serialize_merged_results
+
+    merged_data = {"merged": True}
+
+    def fake_save_json(save_path):
+        p = Path(save_path) / "merged.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(merged_data), encoding="utf-8")
+
+    def fake_save_md(save_path):
+        p = Path(save_path) / "merged.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("merged markdown", encoding="utf-8")
+
+    merged_obj = MagicMock()
+    merged_obj.save_to_json = fake_save_json
+    merged_obj.save_to_markdown = fake_save_md
+
+    pipeline = MagicMock()
+    pipeline.restructure_pages.return_value = [merged_obj]
+
+    page_objects = [MagicMock(), MagicMock()]  # >1 page to trigger merge
+
+    payloads, markdowns = _serialize_merged_results(pipeline, page_objects, str(tmp_path / "art"))
+
+    assert payloads == [merged_data]
+    assert markdowns == ["merged markdown"]
+    pipeline.restructure_pages.assert_called_once()
+
+
+def test_serialize_merged_results_skips_single_page():
+    """_serialize_merged_results returns empty lists when there is only one page."""
+    from backend.ocr_backends.paddleocr_vl import _serialize_merged_results
+
+    pipeline = MagicMock()
+    pipeline.restructure_pages = MagicMock()
+
+    payloads, markdowns = _serialize_merged_results(pipeline, [MagicMock()], None)
+
+    assert payloads == []
+    assert markdowns == []
+    pipeline.restructure_pages.assert_not_called()
+
+
+def test_build_local_pipeline_calls_paddleocrvl():
+    """_build_local_pipeline constructs a PaddleOCRVL with expected kwargs."""
+    from backend.ocr_backends.paddleocr_vl import _build_local_pipeline
+
+    config = OCRBackendConfig(backend="paddle", model="test", use_gpu=False)
+    fake_cls = MagicMock()
+
+    with patch("backend.ocr_backends.paddleocr_vl.PaddleOCRVL", fake_cls):
+        result = _build_local_pipeline(config)
+
+    fake_cls.assert_called_once_with(
+        device="cpu",
+        use_doc_orientation_classify=True,
+        use_doc_unwarping=True,
+        use_layout_detection=True,
+    )
+    assert result is fake_cls.return_value

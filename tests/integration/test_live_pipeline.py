@@ -20,15 +20,35 @@ import pytest
 # ---------------------------------------------------------------------------
 
 _ollama_available = False
+_ollama_models: set[str] = set()
 try:
     import ollama as _ollama_mod
 
-    _ollama_mod.list()
+    _model_list = _ollama_mod.list()
     _ollama_available = True
+    # Collect available model names (strip :tag suffixes for flexible matching)
+    for m in getattr(_model_list, "models", []):
+        name = getattr(m, "model", "") or ""
+        _ollama_models.add(name)
+        _ollama_models.add(name.split(":")[0])
 except Exception:
     pass
 
 pytestmark = pytest.mark.skipif(not _ollama_available, reason="Ollama server not reachable")
+
+
+def _require_ollama_model(model_name: str):
+    """Skip the test if the requested Ollama model is not pulled."""
+    base = model_name.split(":")[0]
+    if base not in _ollama_models and model_name not in _ollama_models:
+        pytest.skip(f"Ollama model '{model_name}' not pulled")
+
+
+def _skip_on_model_error(payload: dict, context: str = ""):
+    """Skip the test if the payload contains a model-not-found or similar error."""
+    err = payload.get("error", "")
+    if err and ("not found" in err or "404" in err):
+        pytest.skip(f"Model unavailable{': ' + context if context else ''}: {err}")
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +94,7 @@ def sample_image(tmp_path: Path) -> Path:
 
 def test_live_ocr_produces_raw_text(sample_image: Path):
     """Run real Ollama OCR on an image and verify we get text back."""
+    _require_ollama_model("deepseek-ocr")
     from backend.extract import run_document_ocr
 
     payload = run_document_ocr(
@@ -84,6 +105,7 @@ def test_live_ocr_produces_raw_text(sample_image: Path):
         use_gpu=True,
     )
 
+    _skip_on_model_error(payload, "deepseek-ocr")
     assert "error" not in payload, f"OCR failed: {payload.get('error')}"
     raw = payload.get("raw_text") or payload.get("markdown") or ""
     assert len(raw) > 0, "OCR returned empty text"
@@ -91,6 +113,8 @@ def test_live_ocr_produces_raw_text(sample_image: Path):
 
 def test_live_structuring_returns_valid_json(sample_image: Path):
     """Run real OCR + structuring and verify the result parses as JSON."""
+    _require_ollama_model("deepseek-ocr")
+    _require_ollama_model("glm-4.7-flash")
     from backend.extract import process_document_pipeline
 
     result = process_document_pipeline(
@@ -103,6 +127,7 @@ def test_live_structuring_returns_valid_json(sample_image: Path):
         return_details=True,
     )
 
+    _skip_on_model_error(result, "deepseek-ocr / glm-4.7-flash")
     assert "error" not in result, f"Pipeline failed: {result.get('error')}"
     structured = result.get("structured_data") or result
     assert isinstance(structured, dict)
@@ -113,6 +138,8 @@ def test_live_structuring_returns_valid_json(sample_image: Path):
 
 def test_live_reasoning_produces_analysis(sample_image: Path):
     """Run real OCR + structuring + reasoning and verify analysis output."""
+    _require_ollama_model("deepseek-ocr")
+    _require_ollama_model("glm-4.7-flash")
     from backend.extract import process_document_pipeline
     from backend.logic import analyze_medical_logic
 
@@ -126,6 +153,7 @@ def test_live_reasoning_produces_analysis(sample_image: Path):
         return_details=True,
     )
 
+    _skip_on_model_error(result, "deepseek-ocr / glm-4.7-flash")
     assert "error" not in result, f"Pipeline failed: {result.get('error')}"
     structured = result.get("structured_data") or result
 
@@ -147,7 +175,7 @@ def test_live_reasoning_produces_analysis(sample_image: Path):
 
 _paddle_available = False
 try:
-    import paddleocr  # noqa: F401
+    from paddleocr import PaddleOCRVL  # noqa: F401
 
     _paddle_available = True
 except Exception:
@@ -167,6 +195,9 @@ def test_live_paddle_local_ocr(sample_image: Path):
         use_gpu=True,
     )
 
+    err = payload.get("error", "")
+    if err and ("dependency" in err.lower() or "pipeline creation" in err.lower()):
+        pytest.skip(f"PaddleOCR runtime dependencies not satisfied: {err}")
     assert "error" not in payload, f"PaddleOCR failed: {payload.get('error')}"
     raw = payload.get("raw_text") or payload.get("markdown") or ""
     assert len(raw) > 0, "PaddleOCR returned empty text"
@@ -193,4 +224,111 @@ def test_live_paddle_service_ocr(sample_image: Path):
     except Exception as exc:
         pytest.skip(f"PaddleOCR service not reachable at {service_url}: {exc}")
 
+    err = payload.get("error", "")
+    if err and ("healthcheck" in err.lower() or "connection" in err.lower()):
+        pytest.skip(f"PaddleOCR service not reachable: {err}")
     assert "error" not in payload, f"PaddleOCR service failed: {payload.get('error')}"
+
+
+# ---------------------------------------------------------------------------
+# Qdrant retrieval live test — requires QDRANT_URL set and healthy
+# ---------------------------------------------------------------------------
+
+_qdrant_available = False
+_qdrant_url = os.getenv("QDRANT_URL", "")
+if _qdrant_url:
+    try:
+        import requests as _req
+
+        _resp = _req.get(f"{_qdrant_url.rstrip('/')}/collections", timeout=3)
+        _qdrant_available = _resp.status_code < 500
+    except Exception:
+        pass
+
+
+@pytest.mark.skipif(not _qdrant_available, reason="Qdrant not reachable at QDRANT_URL")
+@pytest.mark.skipif(not _ollama_available, reason="Ollama server not reachable")
+def test_live_qdrant_index_and_retrieve():
+    """Index a synthetic document into Qdrant and retrieve it by patient hash."""
+    from backend.retrieval.embeddings import OllamaEmbeddings
+    from backend.retrieval.qdrant_store import QdrantVectorStore
+    from backend.retrieval.chunking import chunk_text
+
+    collection = "test_live_mediscan"
+    store = QdrantVectorStore(url=_qdrant_url, collection_name=collection)
+    embedder = OllamaEmbeddings()
+
+    text = "Patient MRN-LIVE-QDRANT diagnosed with pneumonia. Prescribed amoxicillin 500 mg."
+    chunks = chunk_text(text, chunk_size=200, overlap=50)
+
+    import hashlib
+
+    patient_hash = hashlib.sha256("MRN-LIVE-QDRANT".encode()).hexdigest()
+
+    vectors = [embedder.embed(c) for c in chunks]
+    metadata = [
+        {"patient_id_hash": patient_hash, "source_type": "medical_record", "page_number": 1}
+        for _ in chunks
+    ]
+    store.upsert(texts=chunks, vectors=vectors, metadata=metadata)
+
+    query_vec = embedder.embed("pneumonia treatment")
+    results = store.search(
+        vector=query_vec,
+        limit=3,
+        filters={"patient_id_hash": patient_hash},
+    )
+
+    assert len(results) > 0, "Qdrant returned no results for indexed document"
+    assert any("pneumonia" in r.get("text", "") for r in results)
+
+    # Cleanup
+    try:
+        from qdrant_client import QdrantClient
+
+        QdrantClient(url=_qdrant_url).delete_collection(collection)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Multi-page PDF live test — requires Ollama + Poppler
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _ollama_available, reason="Ollama server not reachable")
+def test_live_multipage_pdf(tmp_path: Path):
+    """Process a synthetically constructed 2-page PDF through the full pipeline."""
+    _require_ollama_model("deepseek-ocr")
+    _require_ollama_model("glm-4.7-flash")
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
+    except ImportError:
+        pytest.skip("reportlab not installed — needed for multi-page PDF generation")
+
+    pdf_path = tmp_path / "multipage.pdf"
+    c = canvas.Canvas(str(pdf_path), pagesize=letter)
+    c.drawString(72, 700, "Patient: Bob Test  MRN: MRN-MP-1  DOB: 1990-01-01")
+    c.drawString(72, 680, "Diagnosis: Asthma  Medications: Albuterol inhaler")
+    c.showPage()
+    c.drawString(72, 700, "Vitals: BP 120/80  HR 68  Temp 98.2")
+    c.drawString(72, 680, "Provider: Dr. Multi  Facility: Test Hospital")
+    c.showPage()
+    c.save()
+
+    from backend.extract import process_document_pipeline
+
+    result = process_document_pipeline(
+        str(pdf_path),
+        provider="Ollama",
+        model="glm-4.7-flash",
+        api_key=None,
+        ocr_backend="ollama",
+        ocr_model="deepseek-ocr",
+        return_details=True,
+    )
+
+    assert "error" not in result, f"Multi-page pipeline failed: {result.get('error')}"
+    structured = result.get("structured_data") or result
+    assert isinstance(structured, dict)

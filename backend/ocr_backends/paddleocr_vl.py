@@ -57,6 +57,17 @@ class PaddleOCRVLBackend(BaseOCRBackend):
         return result
 
 
+def _build_local_pipeline(config: OCRBackendConfig):
+    """Construct a local PaddleOCRVL instance. Separated for test injection."""
+    pipeline_kwargs: dict[str, Any] = {
+        "device": "gpu" if config.use_gpu else "cpu",
+        "use_doc_orientation_classify": True,
+        "use_doc_unwarping": True,
+        "use_layout_detection": True,
+    }
+    return PaddleOCRVL(**pipeline_kwargs)
+
+
 def _run_paddle_pipeline(document_path: str, config: OCRBackendConfig):
     if config.service_url:
         client = PaddleOCRVLServiceClient(
@@ -77,13 +88,7 @@ def _run_paddle_pipeline(document_path: str, config: OCRBackendConfig):
             "PaddleOCR-VL is not installed. Install paddleocr[doc-parser] and a compatible PaddlePaddle runtime."
         )
 
-    pipeline_kwargs: dict[str, Any] = {
-        "device": "gpu" if config.use_gpu else "cpu",
-        "use_doc_orientation_classify": True,
-        "use_doc_unwarping": True,
-        "use_layout_detection": True,
-    }
-    pipeline = PaddleOCRVL(**pipeline_kwargs)
+    pipeline = _build_local_pipeline(config)
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(lambda: list(pipeline.predict(document_path)))
         try:

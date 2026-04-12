@@ -64,6 +64,7 @@ streamlit run frontend/app.py
 3. Select a workflow mode: **Direct pipeline**, **Granular extraction graph** (12-node LangGraph), or **Agentic workflow**.
 4. Upload a medical PDF or image.
 5. Review extracted JSON, bounding boxes, annotated output, and overlays across 4 tabs.
+   > **Note:** The Annotated, Overlay, and Bounding Boxes tabs only populate when using a PaddleOCR-VL backend. Ollama-based backends (GLM, DeepSeek) produce text-only output — those tabs will be empty.
 6. Save the record if it looks correct.
 7. Optionally upload a policy and run insurance checking with semantic retrieval.
 
@@ -75,8 +76,8 @@ python -m pytest
 
 ## Notes
 
-- Qdrant is the active retrieval backend.
+- Qdrant retrieval is **disabled by default**. Set `QDRANT_URL` and `QDRANT_ENABLED=true` for semantic search. Without these, the retrieval path silently no-ops.
 - pgvector is scaffolded but not live yet.
-- PaddleOCR-VL requires extra local setup.
+- PaddleOCR-VL requires extra local setup (see [USAGE.md](USAGE.md)).
 
 See `README.md` for the full architecture and API details.
