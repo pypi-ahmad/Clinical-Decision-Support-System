@@ -309,6 +309,50 @@ def test_retrieve_context_node_with_store(monkeypatch):
     assert "HTN" in captured["query"]
 
 
+def test_retrieve_context_uses_document_type(monkeypatch):
+    """Verify that document_type from classify_document_type flows into retrieval filters."""
+    captured = {}
+
+    class DummyStore:
+        def search(self, query, limit=5, filters=None):
+            captured["filters"] = filters
+            return []
+
+    monkeypatch.setattr(eg, "create_vector_store", lambda: DummyStore())
+    monkeypatch.setattr(eg, "get_patient_history", lambda mrn: None)
+
+    eg._retrieve_context_node(
+        {
+            "document_type": "lab_report",
+            "normalized_fields": {"patient": {"mrn": "MRN-2"}, "clinical": {"diagnosis_list": ["Anemia"]}},
+        }
+    )
+    assert captured["filters"]["source_type"] == "lab_report"
+
+
+def test_persist_record_uses_document_type(monkeypatch):
+    """Verify that document_type from classify_document_type flows into persist chunk metadata."""
+    captured = {}
+
+    class DummyStore:
+        def upsert_chunks(self, chunks):
+            captured["source_types"] = [c.source_type for c in chunks]
+            return {"indexed": True, "chunks": len(chunks)}
+
+    monkeypatch.setattr(eg, "create_vector_store", lambda: DummyStore())
+
+    state = eg._persist_record_node(
+        {
+            "file_path": "dummy.pdf",
+            "document_type": "discharge_summary",
+            "structured_data": {"patient": {"mrn": "X"}},
+            "ocr": {"raw_text": "Patient discharged in stable condition.", "per_page_results": []},
+        }
+    )
+    assert state["persisted"] is True
+    assert all(st == "discharge_summary" for st in captured["source_types"])
+
+
 def test_merge_document_record_node_calls_reasoning(monkeypatch):
     monkeypatch.setattr(
         eg,

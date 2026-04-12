@@ -400,13 +400,14 @@ def _retrieve_context_node(state: ExtractionGraphState) -> ExtractionGraphState:
         ocr_payload = state.get("ocr") or {}
         query = ocr_payload.get("raw_text") or ocr_payload.get("markdown") or json.dumps(normalized_fields)
 
+    source_type = state.get("document_type") or "medical_record"
     try:
         hits = store.search(
             query,
             limit=5,
             filters={
                 "patient_id_hash": patient_hash,
-                "source_type": "medical_record",
+                "source_type": source_type,
             },
         )
     except Exception:
@@ -493,13 +494,14 @@ def _persist_record_node(state: ExtractionGraphState) -> ExtractionGraphState:
     structured_data = state.get("structured_data") or {}
     ocr_payload = state.get("ocr") or {}
 
+    source_type = state.get("document_type") or "medical_record"
     store = create_vector_store()
     vector_index_status: dict[str, Any] | None = None
     if store is not None:
         metadata = {
             "patient_id_hash": hash_identifier(structured_data.get("patient", {}).get("mrn")),
             "encounter_date": structured_data.get("encounter", {}).get("date"),
-            "source_type": "medical_record",
+            "source_type": source_type,
             "ocr_backend": ocr_payload.get("backend"),
         }
         try:

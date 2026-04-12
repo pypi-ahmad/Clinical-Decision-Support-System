@@ -8,7 +8,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraph/)
-[![Tests](https://img.shields.io/badge/tests-131%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-133%20passed-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-76%25-yellowgreen)]()
 
 [Quick Start](#quick-start) · [Architecture](#architecture) · [Usage Guide](USAGE.md) · [API Reference](#api-reference) · [Contributing](#roadmap)
@@ -233,7 +233,7 @@ Accepts a JSON body conforming to the `MedicalRecord` schema. Writes the confirm
 ## Testing
 
 ```bash
-python -m pytest                  # Full suite with coverage (131 tests, 76% coverage)
+python -m pytest                  # Full suite with coverage (133 tests, 76% coverage)
 python -m pytest tests/unit/      # Unit tests only
 python -m pytest tests/integration/ # Integration tests only
 python -m pytest -k "extraction_graph" -v  # Filtered run
@@ -241,7 +241,7 @@ python -m pytest -k "extraction_graph" -v  # Filtered run
 
 | Test Module | Count | Coverage Area |
 |---|---|---|
-| `test_extraction_graph.py` | 34 | All 12 graph nodes, confidence routing, error passthrough |
+| `test_extraction_graph.py` | 36 | All 12 graph nodes, confidence routing, error passthrough |
 | `test_ocr_backends.py` | 32 | Config normalization, prompts, multi-page, bbox, annotations |
 | `test_retrieval.py` | 22 | Chunking, hashing, embeddings, payloads, policy context |
 | `test_api_workflows.py` | 11 | All 3 workflow modes, OCR backend selection, policy OCR |
