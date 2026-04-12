@@ -5,10 +5,12 @@ Short path for running the current implementation locally.
 ## What you get
 
 - FastAPI backend with `/analyze`, `/check_insurance`, and `/confirm`
-- Streamlit frontend with OCR selection, review, overlays, downloads, and insurance checks
+- Streamlit frontend with OCR backend selection, review, bbox overlays, annotated downloads, and insurance checks
+- Three extraction workflow modes: Direct pipeline, Granular extraction graph, Agentic workflow
+- Separate OCR / Structuring / Reasoning model configuration
 - SQLite persistence
-- Optional LangGraph extraction mode
-- Optional Qdrant retrieval
+- Optional Qdrant semantic retrieval wired into analysis and insurance reasoning
+- Annotated PDF/image output with bounding box visualization
 
 ## 1. Create and activate a virtual environment
 
@@ -57,12 +59,13 @@ streamlit run frontend/app.py
 
 ## 6. Use the app
 
-1. Choose an OCR backend.
+1. Choose an OCR backend (GLM4-VL, DeepSeek, PaddleOCR-VL local, PaddleOCR-VL service).
 2. Choose structuring and reasoning models separately.
-3. Upload a medical PDF or image.
-4. Review the extracted JSON and overlays.
-5. Save the record if it looks correct.
-6. Optionally upload a policy and run insurance checking.
+3. Select a workflow mode: **Direct pipeline**, **Granular extraction graph** (12-node LangGraph), or **Agentic workflow**.
+4. Upload a medical PDF or image.
+5. Review extracted JSON, bounding boxes, annotated output, and overlays across 4 tabs.
+6. Save the record if it looks correct.
+7. Optionally upload a policy and run insurance checking with semantic retrieval.
 
 ## Test command
 
