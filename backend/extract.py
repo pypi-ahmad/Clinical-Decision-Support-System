@@ -40,7 +40,7 @@ def process_document_pipeline(
     """
     Orchestrates the full extraction pipeline:
     1. Pre-processing: Converts PDF to Image if necessary.
-    2. OCR (The Eye): Uses DeepSeek-OCR (Local) to read text from the image.
+    2. OCR (The Eye): Uses the selected OCR backend (Ollama DeepSeek, Ollama GLM, or PaddleOCR-VL) to read the document.
     3. Structuring (The Clerk): Uses the selected AI Provider/Model to format text into JSON.
 
     Args:
