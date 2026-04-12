@@ -243,15 +243,31 @@ def _classify_document_type_node(state: ExtractionGraphState) -> ExtractionGraph
 
 
 def _split_pages_node(state: ExtractionGraphState) -> ExtractionGraphState:
-    """Placeholder: page splitting is handled inside the OCR node.
+    """Determine the document page count without rendering images.
 
-    This node exists to preserve the graph topology (classify → split → OCR)
-    but delegates actual PDF-to-page rendering to ``run_document_ocr``.
+    Page images are rendered later inside ``_ocr_per_page_node`` via
+    ``run_document_ocr``.  This node provides an early page count so that
+    downstream nodes (and the UI) can display progress information before
+    the heavier OCR pass begins.
     """
     if state.get("error"):
         return {"page_count": 0, "page_image_paths": []}
-    # Actual page rendering happens inside _ocr_per_page_node → run_document_ocr.
-    return {"page_count": 0, "page_image_paths": []}
+
+    file_path = state.get("file_path", "")
+    suffix = Path(file_path).suffix.lower()
+
+    page_count = 0
+    if suffix == ".pdf":
+        try:
+            from pdf2image import pdfinfo_from_path
+            info = pdfinfo_from_path(file_path)
+            page_count = info.get("Pages", 0)
+        except Exception:
+            pass  # Will be determined during OCR
+    elif suffix in (".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".gif", ".webp"):
+        page_count = 1
+
+    return {"page_count": page_count, "page_image_paths": []}
 
 
 def _ocr_per_page_node(state: ExtractionGraphState) -> ExtractionGraphState:
@@ -491,7 +507,18 @@ def _human_review_node(state: ExtractionGraphState) -> ExtractionGraphState:
 
 
 def _persist_record_node(state: ExtractionGraphState) -> ExtractionGraphState:
-    """Index the document into the vector store and record persistence."""
+    """Index the document into the vector store and record persistence.
+
+    When ``requires_human_review`` is set, indexing is skipped so that
+    unreviewed records do not pollute the retrieval index.  The record
+    can be indexed later once a human approves.
+    """
+    if state.get("requires_human_review"):
+        return {
+            "vector_index_status": {"indexed": False, "reason": "Pending human review"},
+            "persisted": False,
+        }
+
     file_path = state.get("file_path", "")
     structured_data = state.get("structured_data") or {}
     ocr_payload = state.get("ocr") or {}

@@ -63,9 +63,28 @@ def test_ingest_document_node_directory_fails(tmp_path):
     assert "not a file" in state["error"].lower()
 
 
-def test_split_pages_node_returns_placeholder_counts():
-    state = eg._split_pages_node({"file_path": "dummy.pdf"})
-    assert "page_count" in state
+def test_split_pages_node_counts_single_image():
+    state = eg._split_pages_node({"file_path": "scan.png"})
+    assert state["page_count"] == 1
+    assert state["page_image_paths"] == []
+
+
+def test_split_pages_node_counts_pdf_pages(tmp_path):
+    """split_pages should report the real page count for a PDF."""
+    # Create a minimal valid PDF (1-page)
+    from PIL import Image
+    img = Image.new("RGB", (100, 100), "white")
+    pdf_path = tmp_path / "test.pdf"
+    img.save(str(pdf_path), "PDF")
+
+    state = eg._split_pages_node({"file_path": str(pdf_path)})
+    assert state["page_count"] == 1
+    assert state["page_image_paths"] == []
+
+
+def test_split_pages_node_unknown_extension():
+    state = eg._split_pages_node({"file_path": "data.csv"})
+    assert state["page_count"] == 0
     assert state["page_image_paths"] == []
 
 
@@ -204,6 +223,21 @@ def test_persist_record_node_no_store(monkeypatch):
     )
     assert state["persisted"] is True
     assert state["vector_index_status"]["indexed"] is False
+
+
+def test_persist_record_node_skips_indexing_when_human_review_required():
+    """When requires_human_review is set, persist_record skips indexing entirely."""
+    state = eg._persist_record_node(
+        {
+            "file_path": "dummy.pdf",
+            "structured_data": {"patient": {"mrn": "X"}},
+            "ocr": {"raw_text": "some text"},
+            "requires_human_review": True,
+        }
+    )
+    assert state["persisted"] is False
+    assert state["vector_index_status"]["indexed"] is False
+    assert "human review" in state["vector_index_status"]["reason"].lower()
 
 
 def test_extract_candidate_fields_node_error_passthrough():
@@ -503,4 +537,6 @@ def test_compiled_extraction_graph_routes_to_human_review(tmp_path, monkeypatch)
 
     assert result["requires_human_review"] is True
     assert result["confidence_score"] < 0.6
-    assert result["persisted"] is True
+    # persist_record now skips indexing when human review is required
+    assert result["persisted"] is False
+    assert result["vector_index_status"]["reason"] == "Pending human review"

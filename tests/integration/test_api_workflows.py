@@ -328,3 +328,106 @@ def test_confirm_endpoint_calls_save_record(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {"status": "saved"}
     assert captured["data"] == payload
+
+
+# ---------------------------------------------------------------------------
+# Response-shape tests: bbox, annotation, and capability fields
+# ---------------------------------------------------------------------------
+
+
+def test_analyze_response_contains_bbox_and_annotation_fields(monkeypatch):
+    """Verify /analyze response includes bounding_boxes, annotation URLs, and page images."""
+    _patch_file_io(monkeypatch)
+    monkeypatch.setattr(
+        main,
+        "process_document_pipeline",
+        lambda file_path, provider, model, api_key, **kw: {
+            "structured_data": {"patient": {"mrn": "BBOX-1"}, "clinical": {}},
+            "ocr": {
+                "raw_text": "text",
+                "bounding_boxes": [{"page_number": 1, "polygon": [[0, 0], [1, 1]], "label": "field"}],
+                "artifact_manifest": {
+                    "original_file_url": "/artifacts/orig.png",
+                    "annotated_pdf_url": "/artifacts/annotated.pdf",
+                    "annotated_pdf_path": "backend/uploads/annotated.pdf",
+                    "annotated_image_paths": ["backend/uploads/ann1.png"],
+                    "annotated_image_urls": ["/artifacts/ann1.png"],
+                    "page_image_urls": ["/artifacts/page1.png"],
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(main, "get_patient_history", lambda mrn: None)
+    monkeypatch.setattr(main, "create_vector_store", lambda: None)
+    monkeypatch.setattr(main, "analyze_medical_logic", lambda *a, **kw: {"summary": "ok", "alerts": [], "trends": []})
+
+    client = TestClient(main.app)
+    files = {"file": ("scan.png", io.BytesIO(b"img"), "image/png")}
+    response = client.post("/analyze", files=files, data={"ocr_backend": "paddle"})
+    body = response.json()
+
+    assert response.status_code == 200
+    # Bounding boxes propagated
+    assert len(body["bounding_boxes"]) == 1
+    assert body["bounding_boxes"][0]["label"] == "field"
+    # Annotation URLs propagated
+    assert body["annotated_pdf_url"] == "/artifacts/annotated.pdf"
+    assert body["annotated_image_urls"] == ["/artifacts/ann1.png"]
+    assert body["page_image_urls"] == ["/artifacts/page1.png"]
+    # Capability fields
+    assert body["ocr_supports_bboxes"] is True
+    assert body["retrieval_enabled"] is False
+
+
+def test_analyze_response_ocr_supports_bboxes_false_for_ollama(monkeypatch):
+    """Verify ocr_supports_bboxes is False when using Ollama backend."""
+    _patch_file_io(monkeypatch)
+    monkeypatch.setattr(
+        main,
+        "process_document_pipeline",
+        lambda file_path, provider, model, api_key, **kw: {
+            "structured_data": {"patient": {"mrn": "OL-1"}, "clinical": {}},
+            "ocr": {"raw_text": "text", "bounding_boxes": [], "artifact_manifest": {}},
+        },
+    )
+    monkeypatch.setattr(main, "get_patient_history", lambda mrn: None)
+    monkeypatch.setattr(main, "create_vector_store", lambda: None)
+    monkeypatch.setattr(main, "analyze_medical_logic", lambda *a, **kw: {"summary": "ok", "alerts": [], "trends": []})
+
+    client = TestClient(main.app)
+    files = {"file": ("scan.png", io.BytesIO(b"img"), "image/png")}
+    response = client.post("/analyze", files=files, data={"ocr_backend": "ollama"})
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["ocr_supports_bboxes"] is False
+    assert body["bounding_boxes"] == []
+
+
+def test_analyze_response_retrieval_enabled_when_indexed(monkeypatch):
+    """Verify retrieval_enabled is True when vector store successfully indexes."""
+    _patch_file_io(monkeypatch)
+    monkeypatch.setattr(
+        main,
+        "run_extraction_graph",
+        lambda **kwargs: {
+            "structured_data": {"patient": {"mrn": "RET-1"}, "clinical": {}},
+            "ocr": {"raw_text": "text", "bounding_boxes": [], "artifact_manifest": {}},
+            "past_data": None,
+            "analysis": {"summary": "done", "alerts": [], "trends": []},
+            "requires_human_review": False,
+            "vector_index_status": {"indexed": True, "chunks": 3, "store": "qdrant"},
+            "error": None,
+        },
+    )
+
+    client = TestClient(main.app)
+    files = {"file": ("doc.pdf", io.BytesIO(b"fake"), "application/pdf")}
+    data = {"extraction_graph_mode": "true"}
+
+    response = client.post("/analyze", files=files, data=data)
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["retrieval_enabled"] is True
+    assert body["vector_index_status"]["indexed"] is True
