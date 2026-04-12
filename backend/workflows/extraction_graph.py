@@ -243,12 +243,15 @@ def _classify_document_type_node(state: ExtractionGraphState) -> ExtractionGraph
 
 
 def _split_pages_node(state: ExtractionGraphState) -> ExtractionGraphState:
-    """Report incoming file page count from the OCR workspace (deferred to ocr_per_page)."""
+    """Placeholder: page splitting is handled inside the OCR node.
+
+    This node exists to preserve the graph topology (classify → split → OCR)
+    but delegates actual PDF-to-page rendering to ``run_document_ocr``.
+    """
     if state.get("error"):
         return {"page_count": 0, "page_image_paths": []}
-    # Page splitting is coupled to PDF rendering, which happens inside run_document_ocr.
-    # We record that the split will happen during the OCR phase.
-    return {"page_count": -1, "page_image_paths": []}
+    # Actual page rendering happens inside _ocr_per_page_node → run_document_ocr.
+    return {"page_count": 0, "page_image_paths": []}
 
 
 def _ocr_per_page_node(state: ExtractionGraphState) -> ExtractionGraphState:
@@ -476,15 +479,14 @@ def _confidence_gate_node(state: ExtractionGraphState) -> ExtractionGraphState:
 
 
 def _human_review_node(state: ExtractionGraphState) -> ExtractionGraphState:
-    """
-    Human review checkpoint.
+    """Human review checkpoint (passthrough).
 
-    In an automated pipeline this node simply flags the record as reviewed and
-    passes through.  In a production deployment this is where you would pause the
-    graph and emit a task/ticket for a human reviewer.
+    The ``requires_human_review`` flag is already set by ``confidence_gate``.
+    In an automated pipeline this node performs no additional work.  A
+    production deployment should replace this body with logic that emits
+    a task/ticket, pauses the graph, and resumes on human approval.
     """
-    # The flag is already set by confidence_gate. No additional state changes are
-    # needed here for the automated path.
+    # TODO: integrate with an external review queue in production.
     return {}
 
 

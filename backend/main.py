@@ -13,10 +13,13 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.params import Form as FormFieldInfo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+import logging
 import shutil
 import os
 import json
 import uuid
+
+logger = logging.getLogger(__name__)
 from backend.database import init_db, save_record, get_patient_history
 from backend.artifacts import ensure_upload_root
 from backend.extract import process_document_pipeline, run_document_ocr
@@ -196,6 +199,7 @@ async def analyze_medical_doc(
         raise HTTPException(status_code=500, detail=current_data)
     
     # 5. Return Results
+    ocr_backend_normalized = (ocr_backend or "").lower().replace("-", "").replace("_", "")
     return {
         "extracted": current_data,
         "analysis": analysis,
@@ -211,6 +215,8 @@ async def analyze_medical_doc(
         "page_image_urls": ocr_payload.get("artifact_manifest", {}).get("page_image_urls", []),
         "requires_human_review": requires_human_review,
         "vector_index_status": vector_index_status,
+        "retrieval_enabled": vector_index_status is not None and vector_index_status.get("indexed", False),
+        "ocr_supports_bboxes": ocr_backend_normalized in ("paddle", "paddleocr", "paddleocrvl", "paddleocrvl15"),
     }
 
 @app.post("/check_insurance")
@@ -328,6 +334,7 @@ def _call_insurance_check(medical_data, policy_text, provider, model, api_key, *
 def _index_for_retrieval(file_path: str, current_data: dict, ocr_payload: dict):
     store = create_vector_store()
     if store is None:
+        logger.warning("Retrieval disabled: no vector store configured (set QDRANT_ENABLED=true)")
         return {"indexed": False, "reason": "No vector store is configured"}
 
     metadata = {

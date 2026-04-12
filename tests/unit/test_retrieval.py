@@ -304,3 +304,87 @@ def test_index_for_retrieval_upserts_to_store(monkeypatch):
     )
     assert result["indexed"] is True
     assert inserted["n"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# QdrantRetrievalStore with mocked client
+# ---------------------------------------------------------------------------
+
+
+def test_qdrant_store_upsert_mocked_client(monkeypatch):
+    """Exercise QdrantRetrievalStore.upsert_chunks with a mocked QdrantClient."""
+    import backend.retrieval.qdrant_store as qs
+
+    if qs.QdrantClient is None:
+        pytest.skip("qdrant-client not installed")
+
+    # Mock the embeddings function to return fixed vectors
+    monkeypatch.setattr(qs, "embed_texts", lambda texts, model=None: [[0.1, 0.2, 0.3]] * len(texts))
+
+    # Create a store but mock out the actual client
+    monkeypatch.setenv("QDRANT_URL", "http://fake:6333")
+
+    upserted = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def collection_exists(self, name):
+            return True
+
+        def upsert(self, collection_name, points):
+            upserted["collection"] = collection_name
+            upserted["count"] = len(points)
+
+    monkeypatch.setattr(qs, "QdrantClient", FakeClient)
+
+    store = qs.QdrantRetrievalStore(collection_name="test_collection")
+    chunks = [
+        RetrievalChunk(
+            chunk_id="c1",
+            document_id="doc-1",
+            text="patient has hypertension",
+            section_type="text",
+            source_type="medical_record",
+            chunk_index=0,
+        ),
+    ]
+    result = store.upsert_chunks(chunks)
+
+    assert result["indexed"] is True
+    assert result["chunks"] == 1
+    assert upserted["collection"] == "test_collection"
+    assert upserted["count"] == 1
+
+
+def test_qdrant_store_search_mocked_client(monkeypatch):
+    """Exercise QdrantRetrievalStore.search with a mocked QdrantClient."""
+    import backend.retrieval.qdrant_store as qs
+
+    if qs.QdrantClient is None:
+        pytest.skip("qdrant-client not installed")
+
+    monkeypatch.setattr(qs, "embed_texts", lambda texts, model=None: [[0.1, 0.2, 0.3]])
+    monkeypatch.setenv("QDRANT_URL", "http://fake:6333")
+
+    class FakeHit:
+        def __init__(self):
+            self.score = 0.95
+            self.payload = {"text": "prior visit note", "page_number": 1, "source_ref": "p1.png"}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def search(self, collection_name, query_vector, query_filter, limit):
+            return [FakeHit()]
+
+    monkeypatch.setattr(qs, "QdrantClient", FakeClient)
+
+    store = qs.QdrantRetrievalStore(collection_name="test_collection")
+    hits = store.search("hypertension", limit=3, filters={"patient_id_hash": "abc123"})
+
+    assert len(hits) == 1
+    assert hits[0]["score"] == 0.95
+    assert hits[0]["text"] == "prior visit note"

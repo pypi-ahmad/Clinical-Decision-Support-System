@@ -8,8 +8,8 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraph/)
-[![Tests](https://img.shields.io/badge/tests-133%20passed-brightgreen)]()
-[![Coverage](https://img.shields.io/badge/coverage-76%25-yellowgreen)]()
+[![Tests](https://img.shields.io/badge/tests-152%20passed-brightgreen)]()
+[![Coverage](https://img.shields.io/badge/coverage-85%25-green)]()
 
 [Quick Start](#quick-start) · [Architecture](#architecture) · [Usage Guide](USAGE.md) · [API Reference](#api-reference) · [Contributing](#roadmap)
 
@@ -233,7 +233,7 @@ Accepts a JSON body conforming to the `MedicalRecord` schema. Writes the confirm
 ## Testing
 
 ```bash
-python -m pytest                  # Full suite with coverage (133 tests, 76% coverage)
+python -m pytest                  # Full suite with coverage (152 tests, 85% coverage)
 python -m pytest tests/unit/      # Unit tests only
 python -m pytest tests/integration/ # Integration tests only
 python -m pytest -k "extraction_graph" -v  # Filtered run
@@ -241,12 +241,13 @@ python -m pytest -k "extraction_graph" -v  # Filtered run
 
 | Test Module | Count | Coverage Area |
 |---|---|---|
-| `test_extraction_graph.py` | 36 | All 12 graph nodes, confidence routing, error passthrough |
+| `test_extraction_graph.py` | 38 | All 12 graph nodes, compiled-graph e2e, confidence routing |
 | `test_ocr_backends.py` | 32 | Config normalization, prompts, multi-page, bbox, annotations |
-| `test_retrieval.py` | 22 | Chunking, hashing, embeddings, payloads, policy context |
+| `test_retrieval.py` | 24 | Chunking, hashing, Qdrant store (mocked client), policy context |
+| `test_agentic_extraction.py` | 15 | All 7 agentic nodes, compiled-graph e2e |
 | `test_api_workflows.py` | 11 | All 3 workflow modes, OCR backend selection, policy OCR |
 | `test_main_unit.py` | 8 | Endpoint routing, error handling, form parameter parsing |
-| `test_ai_wrapper.py` | 7 | Provider adapter dispatch |
+| `test_ai_wrapper.py` | 7 | Provider adapter dispatch, AIProviderError |
 | `test_extract.py` | 6 | Direct pipeline OCR + structuring |
 | `test_database.py` | 5 | SQLite read/write |
 | `test_logic.py` | 4 | Clinical reasoning and insurance logic |

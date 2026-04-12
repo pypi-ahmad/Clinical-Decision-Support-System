@@ -1,6 +1,9 @@
 import types
 
+import pytest
+
 import backend.ai_wrapper as ai_wrapper
+from backend.ai_wrapper import AIProviderError
 
 
 def test_clean_json_output_strips_fences_and_extracts_json_object():
@@ -102,7 +105,7 @@ def test_get_ai_response_anthropic_branch_returns_text(monkeypatch):
     assert result == "anthropic-ok"
 
 
-def test_get_ai_response_error_path_returns_error_string(monkeypatch):
+def test_get_ai_response_error_path_raises_ai_provider_error(monkeypatch):
     """Targets backend.ai_wrapper.get_ai_response exception path in backend/ai_wrapper.py."""
 
     class DummyOllama:
@@ -111,10 +114,11 @@ def test_get_ai_response_error_path_returns_error_string(monkeypatch):
             raise RuntimeError("boom")
 
     monkeypatch.setattr(ai_wrapper, "ollama", DummyOllama)
-    result = ai_wrapper.get_ai_response("Ollama", "m", None, "sys", "usr")
-    assert result.startswith("Error with Ollama:")
+    with pytest.raises(AIProviderError, match="boom"):
+        ai_wrapper.get_ai_response("Ollama", "m", None, "sys", "usr")
 
 
-def test_get_ai_response_unsupported_provider_returns_none():
+def test_get_ai_response_unsupported_provider_raises():
     """Targets backend.ai_wrapper.get_ai_response unsupported-provider behavior in backend/ai_wrapper.py."""
-    assert ai_wrapper.get_ai_response("UnknownProvider", "m", None, "sys", "usr") == "Error with UnknownProvider: Unsupported provider"
+    with pytest.raises(AIProviderError, match="Unsupported provider"):
+        ai_wrapper.get_ai_response("UnknownProvider", "m", None, "sys", "usr")

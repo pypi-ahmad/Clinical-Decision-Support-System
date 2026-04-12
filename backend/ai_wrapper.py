@@ -16,6 +16,15 @@ import anthropic
 import google.genai as genai
 import re
 
+
+class AIProviderError(RuntimeError):
+    """Raised when an AI provider call fails or the provider is unsupported."""
+
+    def __init__(self, provider: str, detail: str):
+        self.provider = provider
+        self.detail = detail
+        super().__init__(f"Error with {provider}: {detail}")
+
 def get_ai_response(provider, model, api_key, system_prompt, user_text):
     """
     Universal wrapper for AI text-to-text generation.
@@ -29,7 +38,9 @@ def get_ai_response(provider, model, api_key, system_prompt, user_text):
 
     Returns:
         str: The raw text response from the AI model.
-        str: Error message if the call fails.
+
+    Raises:
+        AIProviderError: When the provider call fails or the provider is unsupported.
     """
     try:
         # --- 1. LOCAL (OLLAMA) ---
@@ -81,10 +92,12 @@ def get_ai_response(provider, model, api_key, system_prompt, user_text):
             )
             return response.content[0].text
 
-        return f"Error with {provider}: Unsupported provider"
+        raise AIProviderError(provider, "Unsupported provider")
 
+    except AIProviderError:
+        raise
     except Exception as e:
-        return f"Error with {provider}: {str(e)}"
+        raise AIProviderError(provider, str(e)) from e
 
 def clean_json_output(text):
     """

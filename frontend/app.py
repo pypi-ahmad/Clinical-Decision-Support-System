@@ -55,6 +55,10 @@ if 'requires_human_review' not in st.session_state:
     st.session_state['requires_human_review'] = False
 if 'vector_index_status' not in st.session_state:
     st.session_state['vector_index_status'] = None
+if 'retrieval_enabled' not in st.session_state:
+    st.session_state['retrieval_enabled'] = False
+if 'ocr_supports_bboxes' not in st.session_state:
+    st.session_state['ocr_supports_bboxes'] = False
 
 
 def render_model_config(title: str, key_prefix: str, default_provider: str = "Ollama"):
@@ -203,6 +207,8 @@ with st.sidebar:
                     st.session_state['bounding_boxes'] = data.get('bounding_boxes', [])
                     st.session_state['requires_human_review'] = data.get('requires_human_review', False)
                     st.session_state['vector_index_status'] = data.get('vector_index_status')
+                    st.session_state['retrieval_enabled'] = data.get('retrieval_enabled', False)
+                    st.session_state['ocr_supports_bboxes'] = data.get('ocr_supports_bboxes', False)
                     st.success("Analysis Complete!")
                 else:
                     st.error(f"Error: {response.text}")
@@ -240,6 +246,8 @@ with tab1:
 
             with doc_tabs[1]:
                 st.subheader("Annotated Output")
+                if not st.session_state.get('ocr_supports_bboxes'):
+                    st.info("Current OCR backend does not produce bounding boxes. Switch to PaddleOCR-VL for visual annotations.")
                 if st.session_state['annotated_pdf_url']:
                     render_pdf_preview(st.session_state['annotated_pdf_url'])
                     render_download_button(
@@ -256,6 +264,8 @@ with tab1:
 
             with doc_tabs[2]:
                 st.subheader("Original vs Annotated")
+                if not st.session_state.get('ocr_supports_bboxes'):
+                    st.info("Overlay comparison requires an OCR backend that produces bounding boxes (PaddleOCR-VL).")
                 original_urls = st.session_state.get('page_image_urls') or []
                 annotated_urls = st.session_state.get('annotated_image_urls') or []
                 if original_urls and annotated_urls:
@@ -308,6 +318,8 @@ with tab1:
             if vector_index_status:
                 st.divider()
                 st.subheader("🧠 Retrieval Index")
+                if not st.session_state.get('retrieval_enabled'):
+                    st.warning("Semantic retrieval is disabled. Configure Qdrant (QDRANT_ENABLED=true) to enable cross-document search.")
                 st.json(vector_index_status)
 
             if st.session_state.get('ocr_artifacts'):

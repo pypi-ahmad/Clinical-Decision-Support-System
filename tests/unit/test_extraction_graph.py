@@ -395,3 +395,112 @@ def test_build_extraction_graph_requires_langgraph():
         eg.StateGraph = original_state_graph
         eg.END = original_end
         eg.START = original_start
+
+
+# ---------------------------------------------------------------------------
+# Compiled-graph end-to-end invocation
+# ---------------------------------------------------------------------------
+
+_needs_langgraph = pytest.mark.skipif(eg.StateGraph is None, reason="LangGraph not installed")
+
+
+@_needs_langgraph
+def test_compiled_extraction_graph_runs_end_to_end(tmp_path, monkeypatch):
+    """Build and invoke the compiled graph, proving node ordering and state propagation."""
+    # Create a real file so ingest_document passes
+    sample = tmp_path / "patient_notes.pdf"
+    sample.write_bytes(b"%PDF-1.4 fake")
+
+    # Mock only external IO: OCR, LLM, vector store, patient history
+    monkeypatch.setattr(
+        eg,
+        "run_document_ocr",
+        lambda file_path, **kw: {
+            "raw_text": "John Doe BP 130/85",
+            "markdown": "John Doe BP 130/85",
+            "per_page_results": [{"page_number": 1, "raw_text": "John Doe BP 130/85"}],
+            "page_images": [str(sample)],
+        },
+    )
+    monkeypatch.setattr(
+        eg,
+        "get_ai_response",
+        lambda prov, model, key, sys, user: '{"patient": {"full_name": "John Doe", "mrn": "MRN-1"}, "encounter": {"date": "2024-06-01"}, "clinical": {"diagnosis_list": ["HTN"], "medications": [], "vitals": {"bp": "130/85"}}}',
+    )
+    monkeypatch.setattr(eg, "clean_json_output", lambda s: s)
+    monkeypatch.setattr(eg, "create_vector_store", lambda: None)
+    monkeypatch.setattr(eg, "get_patient_history", lambda mrn: None)
+    monkeypatch.setattr(
+        eg,
+        "analyze_medical_logic",
+        lambda cur, past, prov, model, key, **kw: {"summary": "stable", "alerts": [], "trends": []},
+    )
+
+    result = eg.run_extraction_graph(
+        file_path=str(sample),
+        structuring_provider="Ollama",
+        structuring_model="test-model",
+        structuring_api_key=None,
+        reasoning_provider="Ollama",
+        reasoning_model="test-model",
+        reasoning_api_key=None,
+        ocr_backend="ollama",
+        ocr_model=None,
+        ocr_prompt_mode="text",
+        use_gpu=False,
+        paddle_service_url=None,
+    )
+
+    # Verify state propagated through all 12 nodes
+    assert result.get("error") is None
+    assert result["document_type"] == "medical_record"
+    assert result["structured_data"]["patient"]["full_name"] == "John Doe"
+    assert result["analysis"]["summary"] == "stable"
+    assert result["confidence_score"] == pytest.approx(1.0)
+    assert result["requires_human_review"] is False
+    assert result["persisted"] is True
+    assert result["vector_index_status"]["indexed"] is False
+
+
+@_needs_langgraph
+def test_compiled_extraction_graph_routes_to_human_review(tmp_path, monkeypatch):
+    """When OCR yields no text, confidence drops and graph routes through human_review."""
+    sample = tmp_path / "blank.pdf"
+    sample.write_bytes(b"%PDF-1.4 blank")
+
+    monkeypatch.setattr(
+        eg,
+        "run_document_ocr",
+        lambda file_path, **kw: {
+            "raw_text": "",
+            "markdown": "",
+            "per_page_results": [],
+            "page_images": [],
+        },
+    )
+    monkeypatch.setattr(eg, "create_vector_store", lambda: None)
+    monkeypatch.setattr(eg, "get_patient_history", lambda mrn: None)
+    monkeypatch.setattr(
+        eg,
+        "analyze_medical_logic",
+        lambda cur, past, prov, model, key, **kw: {"summary": "N/A", "alerts": [], "trends": []},
+    )
+
+    result = eg.run_extraction_graph(
+        file_path=str(sample),
+        structuring_provider="Ollama",
+        structuring_model="test-model",
+        structuring_api_key=None,
+        reasoning_provider="Ollama",
+        reasoning_model="test-model",
+        reasoning_api_key=None,
+        ocr_backend="ollama",
+        ocr_model=None,
+        ocr_prompt_mode="text",
+        use_gpu=False,
+        paddle_service_url=None,
+    )
+
+    assert result["requires_human_review"] is True
+    assert result["confidence_score"] < 0.6
+    assert result["persisted"] is True
