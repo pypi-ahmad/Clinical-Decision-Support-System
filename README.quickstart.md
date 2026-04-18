@@ -21,9 +21,24 @@ python -m venv .venv
 
 ## 2. Install base dependencies
 
+For a reproducible, hash-verified install (recommended for CI/prod):
+
 ```bash
 python -m pip install --upgrade pip
+python -m pip install --require-hashes --no-deps -r requirements.lock.txt
+```
+
+For day-to-day dev against the ranges in `requirements.txt`:
+
+```bash
 python -m pip install -r requirements.txt
+```
+
+Regenerate the lockfile when you intentionally change `requirements.txt`:
+
+```bash
+uv pip compile --python-version 3.11 --index-strategy unsafe-best-match \
+  --generate-hashes --output-file requirements.lock.txt requirements.txt
 ```
 
 If you want PaddleOCR-VL local Python mode, also install:

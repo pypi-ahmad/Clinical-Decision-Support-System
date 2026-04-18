@@ -90,6 +90,27 @@ $env:QDRANT_ENABLED = "true"
 
 ## Starting the Application
 
+### Set required secrets
+
+The backend rejects every data route unless an API key is configured (or you explicitly opt into anonymous local-dev mode). Retrieval and audit linkage also require an HMAC pepper.
+
+```powershell
+# Windows PowerShell
+$env:MEDISCAN_API_KEY = "change-me-to-a-long-random-string"
+$env:MRN_HMAC_PEPPER  = "long-random-server-only-secret"
+
+# Optional (local development only — SKIPS AUTH, do not use in production):
+# $env:MEDISCAN_ALLOW_ANONYMOUS = "1"
+```
+
+```bash
+# Linux / macOS
+export MEDISCAN_API_KEY="change-me-to-a-long-random-string"
+export MRN_HMAC_PEPPER="long-random-server-only-secret"
+```
+
+The Streamlit frontend automatically reads `MEDISCAN_API_KEY` from its own environment and attaches it as the `X-API-Key` header on every backend call. If you start Streamlit in a separate shell, set the same variable there.
+
 **Terminal 1 — Backend:**
 
 ```bash
@@ -117,20 +138,13 @@ Select the engine used for optical character recognition.
 | Option | Engine | Bounding Boxes | Notes |
 |---|---|---|---|
 | DeepSeek-OCR (Ollama) | Ollama + DeepSeek prompts | No | Text-focused, fast |
-| GLM-OCR (Ollama) | Ollama + GLM-4V prompts | No | Supports `text`, `table`, `figure`, `formula` modes |
-| PaddleOCR-VL (Local Python) | Local PaddleOCR-VL runtime | Yes | Requires `paddleocr[doc-parser]` install |
-| PaddleOCR-VL (Local Service) | HTTP service client | Yes | Requires a running Paddle service endpoint |
+| GLM-OCR (Ollama) | Ollama + GLM-4V prompts | No | Supports the prompt modes below |
+| PaddleOCR-VL-1.5 (Local Python) | Local PaddleOCR-VL runtime | Yes | Requires `paddleocr[doc-parser]` install |
+| PaddleOCR-VL-1.5 (Local Service) | HTTP service client | Yes | The service URL is **server-configured only** via the `PADDLE_SERVICE_URL` environment variable — clients cannot override it |
 
 #### OCR Mode
 
-Applies to GLM-OCR. Controls the prompt template sent to the vision model.
-
-| Mode | Use Case |
-|---|---|
-| `text` | General document text extraction |
-| `table` | Tabular data extraction |
-| `formula` | Mathematical or lab formula recognition |
-| `chart` | Chart and figure interpretation |
+The sidebar exposes the full prompt-mode list supported by the Ollama / GLM backends: `text`, `ocr`, `table`, `formula`, `chart`, `spotting`, `seal`. `text` is the default and is the sensible choice for narrative clinical records. The remaining modes are forwarded verbatim to the vision model as the prompt template selector.
 
 #### Extraction Workflow
 
@@ -206,7 +220,22 @@ The response includes:
 
 ## API Reference
 
-All endpoints accept `multipart/form-data`.
+All data routes require `X-API-Key: <MEDISCAN_API_KEY>`. Document-upload routes accept `multipart/form-data`; `/confirm` and the review-queue endpoints accept `application/json`. Every response echoes an `X-Request-ID` header (generated when the client does not send one) so log lines and downstream errors can be correlated.
+
+### Route map
+
+| Route | Method | Auth | Content-Type | Description |
+|---|---|---|---|---|
+| `/analyze` | POST | `X-API-Key` | multipart | Run the selected extraction workflow on an uploaded document |
+| `/check_insurance` | POST | `X-API-Key` | multipart | Compare extracted diagnoses against a policy document |
+| `/confirm` | POST | `X-API-Key` | JSON | Persist a confirmed `MedicalRecord` to SQLite |
+| `/artifacts/{path}` | GET | `X-API-Key` | — | Stream a generated artifact (rendered page, annotated PDF, manifest) |
+| `/review/pending` | GET | `X-API-Key` | — | List pending human-review tasks (SQLite-backed) |
+| `/review/{task_id}/approve` | POST | `X-API-Key` | JSON (optional) | Approve a queued review task |
+| `/review/{task_id}/reject` | POST | `X-API-Key` | JSON (optional) | Reject a queued review task |
+| `/health` | GET | — | — | Liveness probe |
+| `/ready` | GET | — | — | Readiness probe — checks Ollama reachability, compiled graph warmup, and vector-store config |
+| `/metrics` | GET | `X-API-Key` | — | Prometheus scrape endpoint — **only mounted when `MEDISCAN_PROMETHEUS=1`** |
 
 ### `POST /analyze`
 
@@ -215,24 +244,25 @@ Process a medical document through the selected extraction workflow.
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `file` | file | required | Medical document (PDF or image) |
-| `provider` | string | `"Ollama"` | AI provider for default/fallback model selection |
-| `model` | string | `"glm-4.7-flash"` | Default model name |
-| `api_key` | string | `null` | API key (not required for Ollama) |
+| `provider` | string | `"Ollama"` | Fallback provider when `structuring_*` / `reasoning_*` are unset |
+| `model` | string | `"glm-4.7-flash"` | Fallback model name |
+| `api_key` | string | `null` | Fallback API key. **Accepted only when `MEDISCAN_ALLOW_USER_API_KEYS=1`** — otherwise the server resolves keys from its own `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` env vars |
 | `structuring_provider` | string | `null` | Override provider for the structuring LLM |
 | `structuring_model` | string | `null` | Override model for the structuring LLM |
-| `structuring_api_key` | string | `null` | API key for the structuring provider |
+| `structuring_api_key` | string | `null` | Same opt-in rule as `api_key` |
 | `reasoning_provider` | string | `null` | Override provider for the reasoning LLM |
 | `reasoning_model` | string | `null` | Override model for the reasoning LLM |
-| `reasoning_api_key` | string | `null` | API key for the reasoning provider |
+| `reasoning_api_key` | string | `null` | Same opt-in rule as `api_key` |
 | `ocr_backend` | string | `"ollama"` | OCR engine: `ollama`, `glm`, or `paddle` |
 | `ocr_model` | string | `null` | OCR model identifier |
-| `ocr_mode` | string | `"text"` | Prompt mode for GLM OCR |
+| `ocr_mode` | string | `"text"` | Prompt mode for Ollama-based OCR |
 | `use_gpu` | boolean | `true` | Enable GPU acceleration for PaddleOCR-VL |
-| `paddle_service_url` | string | `null` | Service URL for PaddleOCR-VL service mode |
 | `agentic_mode` | boolean | `false` | Use the agentic LangGraph workflow |
 | `extraction_graph_mode` | boolean | `false` | Use the granular 12-node extraction graph |
 
-**Response fields:** `extracted`, `analysis`, `history_available`, `file_path`, `file_url`, `ocr`, `bounding_boxes`, `annotated_pdf_path`, `annotated_pdf_url`, `annotated_image_paths`, `annotated_image_urls`, `page_image_urls`, `requires_human_review`, `vector_index_status`.
+> **Removed:** `paddle_service_url` is no longer a client parameter. The backend reads it exclusively from `PADDLE_SERVICE_URL` to close an SSRF vector.
+
+**Response fields:** `extracted`, `analysis`, `history_available`, `file_path`, `file_url`, `ocr`, `bounding_boxes`, `annotated_pdf_path`, `annotated_pdf_url`, `annotated_image_paths`, `annotated_image_urls`, `page_image_urls`, `requires_human_review`, `vector_index_status`, `retrieval_enabled`, `ocr_supports_bboxes`, `correlation_id`, `lineage` (commit SHA + key dependency versions).
 
 ### `POST /check_insurance`
 
@@ -241,19 +271,18 @@ Compare extracted medical data against an insurance policy document.
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `policy_file` | file | required | Insurance policy document (TXT or PDF) |
-| `medical_json` | string | required | JSON-serialized extracted medical data |
-| `provider` | string | `"Ollama"` | AI provider |
-| `model` | string | `"llama3"` | Model name |
-| `api_key` | string | `null` | API key |
+| `medical_json` | string | required | JSON-serialized extracted medical data (validated against `MedicalRecord`) |
+| `provider` | string | `"Ollama"` | Fallback provider |
+| `model` | string | `"glm-4.7-flash"` | Fallback model |
+| `api_key` | string | `null` | Fallback key; gated by `MEDISCAN_ALLOW_USER_API_KEYS` |
 | `reasoning_provider` | string | `null` | Override provider for reasoning |
 | `reasoning_model` | string | `null` | Override model for reasoning |
-| `reasoning_api_key` | string | `null` | API key for reasoning provider |
-| `policy_ocr` | boolean | `false` | Run OCR on the policy document before reasoning |
+| `reasoning_api_key` | string | `null` | Same opt-in rule as `api_key` |
+| `policy_ocr` | boolean | `false` | Run OCR on the policy document before reasoning (auto-enabled for non-`.txt` uploads) |
 | `ocr_backend` | string | `"ollama"` | OCR backend for policy OCR |
 | `ocr_model` | string | `null` | OCR model for policy OCR |
 | `ocr_mode` | string | `"text"` | OCR mode for policy OCR |
 | `use_gpu` | boolean | `true` | GPU flag for policy OCR |
-| `paddle_service_url` | string | `null` | Service URL for Paddle policy OCR |
 
 **Response fields:** `eligible`, `reasoning`, `missing_info`.
 
@@ -265,17 +294,30 @@ Persist a confirmed medical record to SQLite.
 
 **Response:** `{ "status": "saved" }`
 
+### Review-queue routes
+
+- `GET /review/pending?limit=50` returns `{"tasks": [...], "count": n}` from the SQLite review queue.
+- `POST /review/{task_id}/approve` and `POST /review/{task_id}/reject` mutate the task. Both accept an optional JSON body `{"reviewer": "...", "notes": "..."}`. A 404 is returned when the task does not exist or is already resolved.
+
+### Artifact downloads
+
+`GET /artifacts/{path}` streams files under the backend upload root. The path is validated against directory-traversal. All requests require the API key.
+
 ## Running Tests
 
 ```bash
-# Full suite with coverage
+# Full suite with coverage (last known: 241 passed, 8 skipped)
 python -m pytest
 
 # Unit tests only
 python -m pytest tests/unit/
 
-# Integration tests only
+# Integration tests only (live-stack tests auto-skip when services are unreachable)
 python -m pytest tests/integration/
+
+# Quality evaluation harness — OCR CER, field-set F1, MRN exact-match
+# Skips when tests/eval/gold/ is empty; add JSON fixtures to enable scoring.
+python -m pytest -m eval
 
 # Specific module
 python -m pytest tests/unit/test_extraction_graph.py -v
@@ -283,13 +325,62 @@ python -m pytest tests/unit/test_extraction_graph.py -v
 
 ## Environment Variables
 
+Grouped by concern. Defaults reflect what the code supplies; `—` means no default.
+
+### Auth, uploads, and hardening
+
 | Variable | Default | Description |
 |---|---|---|
-| `QDRANT_URL` | — | Qdrant server URL (e.g., `http://localhost:6333`) |
-| `QDRANT_ENABLED` | `false` | Enable Qdrant retrieval |
-| `QDRANT_API_KEY` | — | Qdrant authentication key |
-| `VECTOR_STORE` | `qdrant` | Active vector store backend |
-| `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Embedding model for vector indexing |
+| `MEDISCAN_API_KEY` | — | Shared secret required on every data route as `X-API-Key` |
+| `MEDISCAN_ALLOW_ANONYMOUS` | `0` | Local-dev opt-in: skips auth **only** when `MEDISCAN_API_KEY` is unset |
+| `MEDISCAN_ALLOW_USER_API_KEYS` | `0` | Set to `1` to accept client-supplied provider keys on `/analyze` and `/check_insurance` |
+| `MRN_HMAC_PEPPER` | — | Server-held secret for HMAC-SHA256 hashing of MRNs; required for retrieval / audit linkage (never falls back to plain SHA-256) |
+| `MEDISCAN_MAX_UPLOAD_BYTES` | `52428800` | Hard cap per upload (50 MiB) |
+| `MEDISCAN_MAX_PDF_PAGES` | `200` | Reject PDFs with more pages |
+| `MEDISCAN_MAX_PIXELS` | `60000000` | Pillow decompression-bomb guard |
+| `MEDISCAN_MAX_RECORD_BYTES` | `262144` | Max serialized record before `/confirm` persistence |
+| `MEDISCAN_RATE_LIMIT` | `1` | Set to `0` to disable slowapi |
+| `MEDISCAN_DEFAULT_RATE` | `60/minute` | slowapi default bucket per remote address |
+| `MEDISCAN_ALLOWED_ORIGINS` | `http://localhost:8501,http://127.0.0.1:8501` | Comma-separated CORS allow-list |
+| `MEDISCAN_ENABLE_DOCS` | `0` | Set to `1` to expose `/docs`, `/redoc`, `/openapi.json` |
+| `MEDISCAN_PII_SCRUB` | `0` | Opt-in PHI scrubber (Presidio-compatible) |
+
+### Storage and retrieval
+
+| Variable | Default | Description |
+|---|---|---|
+| `MEDISCAN_DB_PATH` | `backend/records.db` | SQLite file location |
+| `MEDISCAN_UPLOAD_ROOT` | `backend/uploads` | Artifact / upload directory |
+| `MEDISCAN_RENDER_DPI` | `150` | PDF → PNG render DPI |
+| `VECTOR_STORE` | *(auto)* | Force `qdrant` or `pgvector`; auto-picks the first configured backend |
+| `QDRANT_URL` | `http://localhost:6333` | Qdrant endpoint |
+| `QDRANT_API_KEY` | — | Required whenever `QDRANT_URL` is off-host |
+| `QDRANT_ENABLED` | *(auto)* | Force-enable Qdrant (`1` / `true`) |
+| `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Embedding model for document indexing |
+
+### LLM client
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | — | Server-side provider credentials |
+| `MEDISCAN_LLM_TIMEOUT` | `120` | Per-provider request timeout in seconds |
+| `MEDISCAN_LLM_RETRIES` | `3` | Tenacity `stop_after_attempt`. Transient-only: 400/401/403/404 are never retried |
+| `MEDISCAN_ANTHROPIC_MAX_TOKENS` | `4096` | Anthropic `max_tokens` ceiling |
+
+### Observability
+
+| Variable | Default | Description |
+|---|---|---|
+| `LOG_LEVEL` | `INFO` | Structlog / stdlib logging level |
+| `MEDISCAN_PROMETHEUS` | `0` | Mount `/metrics` (requires `X-API-Key`) |
+| `MEDISCAN_OTEL` | `0` | Enable OpenTelemetry FastAPI auto-instrumentation |
+| `MEDISCAN_GIT_SHA` | *(git)* | Overrides the commit SHA reported in the `lineage` response field |
+
+### Service URLs
+
+| Variable | Default | Description |
+|---|---|---|
+| `PADDLE_SERVICE_URL` | — | PaddleOCR-VL service-mode endpoint. Server-side only; never accepted from clients. |
 
 ## Verifying Live Prerequisites
 
@@ -345,9 +436,10 @@ The Annotated, Overlay, and Bounding Boxes tabs in the UI only populate when usi
 ## Known Limitations
 
 - Ollama OCR backends do not emit native bounding boxes; the Annotated, Overlay, and Bounding Boxes tabs are **empty** for GLM and DeepSeek paths. Use PaddleOCR-VL for bbox artifacts.
-- Qdrant retrieval is **disabled by default**. Without `QDRANT_URL` and `QDRANT_ENABLED=true` the retrieval path silently no-ops and contributes zero semantic context.
-- pgvector is scaffolded but not wired for live reads or writes. `is_configured()` always returns `False`.
+- Qdrant retrieval is best-effort. If `QDRANT_URL` is unreachable or `MRN_HMAC_PEPPER` is unset, the retrieval path silently no-ops and `retrieval_enabled` is `false` in the response.
+- pgvector is scaffolded but not wired for live reads or writes. `PgvectorRetrievalStore.is_configured()` returns `False` by default.
 - SQLite history returns the latest prior record per MRN, not a full longitudinal timeline.
 - PaddleOCR-VL requires compatible Paddle packages and, for GPU mode, a matching PaddlePaddle GPU wheel.
-- The API has no authentication or authorization; CORS is fully open. Not suitable for production deployment without additional hardening.
-- The `human_review` node in the extraction graph is a passthrough in the automated path; production deployments should wire it to an external task/ticket system.
+- The review queue (`/review/pending`, `/review/{id}/approve`, `/review/{id}/reject`) is SQLite-backed. There is no external ticketing integration (Jira / ServiceNow / PagerDuty) — that wiring is left to deployment.
+- The quality-evaluation harness (`pytest -m eval`) measures OCR CER, field-set F1, and MRN exact-match only. Retrieval relevance and end-to-end reasoning quality are not yet scored, and `tests/eval/gold/` is empty by design until real fixtures are contributed.
+- The server-side log stream is JSON-structured and PHI-redacted via structlog, but log **shipping / retention / rotation** is a deployment concern and is not handled by the application.

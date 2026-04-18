@@ -8,8 +8,8 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraph/)
-[![Tests](https://img.shields.io/badge/tests-173%20(166%20pass%20·%207%20skip)-brightgreen)]()
-[![Coverage](https://img.shields.io/badge/coverage-90%25-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-249%20(241%20pass%20·%208%20skip)-brightgreen)]()
+[![Coverage](https://img.shields.io/badge/coverage-81%25-brightgreen)]()
 
 [Quick Start](#quick-start) · [Architecture](#architecture) · [Usage Guide](USAGE.md) · [API Reference](#api-reference) · [Contributing](#roadmap)
 
@@ -24,12 +24,15 @@ MediScan OCR transforms unstructured medical documents into validated, machine-r
 ### Key Features
 
 - **Multi-engine OCR** — Swap between GLM-4V, DeepSeek, and PaddleOCR-VL backends without changing application code.
-- **Graph-based extraction** — A 12-node LangGraph pipeline (classify → OCR → extract → validate → normalize → retrieve → reason → gate) with typed state and full node-level observability.
-- **Independent model routing** — Configure separate providers and models for OCR, structuring, and clinical reasoning within a single request.
+- **Graph-based extraction** — A 12-node LangGraph pipeline (ingest → classify → split → OCR → extract → validate → normalize → retrieve → merge → confidence_gate → human_review → persist) with typed state and per-node observability.
+- **Independent model routing** — Configure separate providers and models for structuring and clinical reasoning within a single request.
 - **Semantic retrieval** — Qdrant-backed vector search with exact metadata filters for cross-encounter context and policy clause retrieval.
-- **Artifact generation** — Bounding box overlays, annotated PDFs/images, and downloadable audit artifacts.
+- **Artifact generation** — Bounding box overlays, annotated PDFs/images, and protected downloadable artifacts.
 - **Insurance verification** — Policy ingestion (text or OCR), semantic comparison against extracted diagnoses, and explainable eligibility reasoning.
-- **Human-in-the-loop** — Confidence-gated review flags, inline data editing, and manual correction before persistence.
+- **Human-in-the-loop** — Confidence-gated review tasks persisted to SQLite; approve/reject endpoints for an operator queue.
+- **Security hardening** — `X-API-Key` auth on every data route, rate limiting (slowapi), upload magic-byte validation, filename sanitization, SSRF guard on outbound service URLs, HMAC-peppered MRN hashing, and a prompt-injection firewall on retrieved chunks.
+- **Resilient LLM client** — Tenacity retries with exponential jitter and a transient-only retry predicate (auth/validation errors are not retried); per-provider timeouts for OpenAI, Anthropic, Gemini, and Ollama.
+- **Observability** — Structured JSON logging with PHI redaction, per-request correlation IDs (`X-Request-ID`), optional Prometheus `/metrics`, and optional OpenTelemetry FastAPI instrumentation.
 
 ## Quick Start
 
@@ -42,8 +45,15 @@ cd Clinical-Decision-Support-System
 python -m venv .venv && .venv\Scripts\Activate.ps1   # Windows
 # source .venv/bin/activate                           # Linux / macOS
 
-# Dependencies
-pip install --upgrade pip && pip install -r requirements.txt
+# Dependencies (reproducible build uses the lock file)
+pip install --upgrade pip
+pip install -r requirements.lock.txt                  # or: pip install -r requirements.txt
+
+# Required env vars
+$env:MEDISCAN_API_KEY = "change-me-to-a-long-random-string"   # required by every data route
+$env:MRN_HMAC_PEPPER  = "long-random-server-only-secret"      # required for retrieval / audit linkage
+# Local dev only (skips auth — DO NOT set in production):
+# $env:MEDISCAN_ALLOW_ANONYMOUS = "1"
 
 # Launch
 python -m uvicorn backend.main:app --reload --port 8000   # Terminal 1
@@ -102,7 +112,12 @@ flowchart TB
 
 ```
 ├── backend/
-│   ├── main.py                     # FastAPI entry point, endpoint routing
+│   ├── main.py                     # FastAPI app, routes, CORS, rate-limit, observability wiring
+│   ├── security.py                 # API-key auth, upload validation, SSRF guard, prompt firewall
+│   ├── logging_config.py           # Structlog + PHI-redacting log processors
+│   ├── observability.py            # Prometheus + OTel hooks, request-ID middleware
+│   ├── lineage.py                  # Commit SHA + dependency versions for audit payloads
+│   ├── pii_scrub.py                # Optional Presidio-compatible PHI scrubber
 │   ├── extract.py                  # Direct pipeline: OCR → structuring orchestration
 │   ├── ocr.py                      # Thin OCR dispatch layer
 │   ├── ocr_backends/
@@ -119,18 +134,21 @@ flowchart TB
 │   │   ├── vector_store.py         # Abstract vector store interface
 │   │   ├── qdrant_store.py         # Qdrant implementation (active)
 │   │   └── pgvector_store.py       # pgvector scaffold (not live)
-│   ├── logic.py                    # Clinical reasoning and insurance logic
+│   ├── logic.py                    # Clinical reasoning + insurance logic (with prompt firewall)
 │   ├── ai_wrapper.py               # Multi-provider LLM adapter (Ollama/OpenAI/Anthropic/Gemini)
 │   ├── artifacts.py                # Page rendering, annotation drawing, manifest generation
-│   ├── database.py                 # SQLite persistence layer
+│   ├── database.py                 # SQLite persistence + human-review queue
 │   └── models.py                   # Pydantic domain models (MedicalRecord, etc.)
 ├── frontend/
 │   └── app.py                      # Streamlit application
 ├── tests/
-│   ├── unit/                       # 130+ unit tests across all modules
-│   └── integration/                # 21 API-level + live-stack tests
-├── requirements.txt
-├── pytest.ini
+│   ├── unit/                       # Module-level tests across backend/
+│   ├── integration/                # FastAPI TestClient + live-stack (auto-skip)
+│   └── eval/                       # Quality harness: metrics + gold fixtures (opt-in via -m eval)
+├── requirements.txt                # Unpinned top-level declarations
+├── requirements.lock.txt           # Fully resolved reproducible install
+├── pytest.ini                      # Markers: live, eval
+├── Dockerfile                      # Container image build
 ├── USAGE.md                        # Comprehensive usage guide
 └── README.quickstart.md            # Minimal startup path
 ```
@@ -164,7 +182,7 @@ ingest → classify → split → ocr → extract → validate → normalize →
 | `retrieve_context` | Load SQLite history + Qdrant vector context |
 | `merge_document_record` | Reasoning LLM call with combined context |
 | `confidence_gate` | Score confidence; route to human review if below threshold |
-| `human_review` | Flag for manual review (passthrough in automated path) |
+| `human_review` | Enqueue a review task in SQLite (exposed via `/review/*`) |
 | `persist_record` | Index document chunks to the vector store |
 
 ### Agentic Workflow
@@ -198,27 +216,37 @@ Vector search is **additive context**, not a replacement for the relational SQLi
 
 ## API Reference
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `/analyze` | POST | Process a medical document through the selected extraction workflow |
-| `/check_insurance` | POST | Compare extracted diagnoses against an insurance policy |
-| `/confirm` | POST | Persist a confirmed medical record to SQLite |
+All data routes require the `X-API-Key` header to match `MEDISCAN_API_KEY`. A request-scoped `X-Request-ID` header is accepted on ingress and echoed on every response (or auto-generated when absent).
+
+| Endpoint | Method | Auth | Description |
+|---|---|---|---|
+| `/analyze` | POST | `X-API-Key` | Process a medical document through the selected extraction workflow |
+| `/check_insurance` | POST | `X-API-Key` | Compare extracted diagnoses against an insurance policy |
+| `/confirm` | POST | `X-API-Key` | Persist a confirmed medical record to SQLite |
+| `/artifacts/{path}` | GET | `X-API-Key` | Stream a generated artifact (bounding-box overlay, annotated page, manifest) |
+| `/review/pending` | GET | `X-API-Key` | List pending human-review tasks |
+| `/review/{task_id}/approve` | POST | `X-API-Key` | Approve a queued review task |
+| `/review/{task_id}/reject` | POST | `X-API-Key` | Reject a queued review task |
+| `/health` | GET | — | Liveness probe |
+| `/ready` | GET | — | Readiness probe (checks Ollama / Qdrant / compiled graphs) |
+| `/metrics` | GET | `X-API-Key` | Prometheus scrape endpoint (only mounted when `MEDISCAN_PROMETHEUS=1`) |
 
 ### `POST /analyze`
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `file` | file | *required* | Medical document (PDF, JPG, PNG) |
+| `file` | file | *required* | Medical document (PDF, JPG, PNG); magic-byte validated |
 | `ocr_backend` | string | `ollama` | OCR engine: `ollama`, `glm`, `paddle` |
 | `ocr_mode` | string | `text` | Prompt mode (GLM only) |
 | `structuring_provider` | string | `null` | Provider for the structuring LLM |
 | `structuring_model` | string | `null` | Model for the structuring LLM |
+| `structuring_api_key` | string | `null` | Per-request override; **accepted only when `MEDISCAN_ALLOW_USER_API_KEYS=1`**, otherwise the server-side env var (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY`) is used |
 | `reasoning_provider` | string | `null` | Provider for the reasoning LLM |
 | `reasoning_model` | string | `null` | Model for the reasoning LLM |
+| `reasoning_api_key` | string | `null` | Same opt-in rule as `structuring_api_key` |
 | `extraction_graph_mode` | bool | `false` | Enable 12-node granular extraction graph |
 | `agentic_mode` | bool | `false` | Enable first-gen agentic workflow |
 | `use_gpu` | bool | `true` | GPU acceleration for PaddleOCR-VL |
-| `paddle_service_url` | string | `null` | Endpoint for PaddleOCR-VL service mode |
 
 > Full parameter reference and response schema in [USAGE.md](USAGE.md#api-reference).
 
@@ -233,68 +261,111 @@ Accepts a JSON body conforming to the `MedicalRecord` schema. Writes the confirm
 ## Testing
 
 ```bash
-python -m pytest                  # Full suite with coverage
-python -m pytest tests/unit/      # Unit tests only
-python -m pytest tests/integration/ # Integration tests only
-python -m pytest -k "extraction_graph" -v  # Filtered run
+python -m pytest                     # Full suite with coverage (241 passed, 8 skipped — all live tests auto-skip without services)
+python -m pytest tests/unit/         # Unit tests only
+python -m pytest tests/integration/  # Integration tests only
+python -m pytest -m eval             # Quality-evaluation harness (skips when no gold fixtures)
+python -m pytest -k "extraction_graph" -v           # Filtered run
 python -m pytest tests/integration/test_live_pipeline.py -v  # Live tests (require running services)
 ```
 
 ### Verification Tiers
 
-Tests are organized into two verification tiers. **Mocked tests** exercise code paths with fakes and assertions — they validate logic correctness but do not prove that external services (Ollama, Qdrant, PaddleOCR) produce usable output. **Live-stack tests** call real services and are auto-skipped when the required backend is unreachable.
+Tests are organized into three tiers. **Mocked tests** exercise code paths with fakes and assertions — they validate logic correctness but do not prove that external services (Ollama, Qdrant, PaddleOCR) produce usable output. **Live-stack tests** call real services and are auto-skipped when the required backend is unreachable. **Quality evaluation** scores CER / field-level F1 / exact-match against JSON gold fixtures (skipped when the `tests/eval/gold/` directory is empty).
 
 | Tier | Scope | Skip Condition |
 |---|---|---|
-| **Mocked (unit)** | All nodes, serialization, config, schema, routing | Never skipped |
+| **Mocked (unit + integration)** | All nodes, serialization, config, schema, routing, security, observability | Never skipped |
 | **Live (integration)** | Real Ollama OCR + structuring + reasoning, Qdrant index/search, multi-page PDF | Skipped when Ollama / Qdrant / PaddleOCR unreachable |
+| **Eval (`-m eval`)** | Character / word error rate, field-set F1, MRN exact-match on gold fixtures | Skipped when `tests/eval/gold/*.json` is empty |
 
 > **Important:** A green mocked-test suite does **not** prove end-to-end correctness. Run live-stack tests against real services to validate actual model output quality and retrieval recall.
 
-| Test Module | Count | Coverage Area |
-|---|---|---|
-| `test_extraction_graph.py` | 41 | All 12 graph nodes, compiled-graph e2e, page counting, human-review persistence guard |
-| `test_ocr_backends.py` | 42 | Config normalization, prompts, multi-page, bbox, annotations, Paddle serialization, service client success/error |
-| `test_retrieval.py` | 24 | Chunking, hashing, Qdrant store (mocked client), policy context |
-| `test_agentic_extraction.py` | 15 | All 7 agentic nodes, compiled-graph e2e |
-| `test_api_workflows.py` | 14 | All 3 workflow modes, bbox/annotation fields, retrieval_enabled, ocr_supports_bboxes |
-| `test_main_unit.py` | 8 | Endpoint routing, error handling, form parameter parsing |
-| `test_ai_wrapper.py` | 7 | Provider adapter dispatch, AIProviderError |
-| `test_extract.py` | 6 | Direct pipeline OCR + structuring |
-| `test_live_pipeline.py` | 7 | Live Ollama OCR + structuring + reasoning, Qdrant index/retrieve, multi-page PDF (auto-skip) |
-| `test_database.py` | 5 | SQLite read/write |
-| `test_logic.py` | 4 | Clinical reasoning and insurance logic |
-| `test_models.py` | 2 | Pydantic schema validation |
+Major test modules (per `tests/`):
+
+- `tests/unit/` — `test_ai_wrapper.py`, `test_agentic_extraction.py`, `test_database.py`, `test_extract.py`, `test_extraction_graph.py`, `test_logic.py`, `test_main_unit.py`, `test_models.py`, `test_observability.py`, `test_ocr_backends.py`, `test_retrieval.py`.
+- `tests/integration/` — `test_api_workflows.py` (FastAPI `TestClient`), `test_live_pipeline.py` (real Ollama + Qdrant, auto-skip).
+- `tests/eval/` — `test_metrics.py` (metric-math correctness, runs by default), `test_extraction_quality.py` (gated on `-m eval`).
 
 ## Configuration
 
+Environment variables grouped by concern. Defaults are shown where the code supplies one.
+
+**Auth, uploads, and hardening**
+
 | Variable | Default | Description |
 |---|---|---|
-| `QDRANT_URL` | — | Qdrant server endpoint |
-| `QDRANT_ENABLED` | `false` | Enable semantic retrieval |
-| `QDRANT_API_KEY` | — | Qdrant authentication key |
-| `VECTOR_STORE` | `qdrant` | Active vector store backend |
-| `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Embedding model for document indexing |
+| `MEDISCAN_API_KEY` | — | Shared secret required on every data route as `X-API-Key`. Must be set in production. |
+| `MEDISCAN_ALLOW_ANONYMOUS` | `0` | Local-dev escape hatch: skips auth only when `MEDISCAN_API_KEY` is unset. |
+| `MEDISCAN_ALLOW_USER_API_KEYS` | `0` | When `1`, `/analyze` accepts client-supplied `structuring_api_key` / `reasoning_api_key`; otherwise the server resolves keys from its own env vars. |
+| `MRN_HMAC_PEPPER` | — | Server-held secret for HMAC-SHA256 hashing of MRNs. When unset, retrieval / audit linkage silently no-ops (never falls back to plain SHA-256). |
+| `MEDISCAN_MAX_UPLOAD_BYTES` | `52428800` | Hard cap per upload (50 MiB). |
+| `MEDISCAN_MAX_PDF_PAGES` | `200` | Reject PDFs with more pages than this. |
+| `MEDISCAN_MAX_PIXELS` | `60000000` | Pillow decompression-bomb guard. |
+| `MEDISCAN_MAX_RECORD_BYTES` | `262144` | Max serialized record size before persistence. |
+| `MEDISCAN_RATE_LIMIT` | `1` | Set to `0` to disable slowapi. |
+| `MEDISCAN_DEFAULT_RATE` | `60/minute` | slowapi default bucket per remote address. |
+| `MEDISCAN_ALLOWED_ORIGINS` | `http://localhost:8501,http://127.0.0.1:8501` | Comma-separated CORS allow-list. |
+| `MEDISCAN_ENABLE_DOCS` | `0` | Set to `1` to expose `/docs`, `/redoc`, `/openapi.json`. |
+| `MEDISCAN_PII_SCRUB` | `0` | Opt-in PHI scrubber (Presidio-compatible). |
+
+**Storage and retrieval**
+
+| Variable | Default | Description |
+|---|---|---|
+| `MEDISCAN_DB_PATH` | `backend/records.db` | SQLite file location. |
+| `MEDISCAN_UPLOAD_ROOT` | `backend/uploads` | Artifact / upload directory. |
+| `MEDISCAN_RENDER_DPI` | `150` | PDF→PNG render DPI. |
+| `VECTOR_STORE` | *(auto)* | Force `qdrant` or `pgvector`; default picks the first configured backend. |
+| `QDRANT_URL` | `http://localhost:6333` | Qdrant endpoint. |
+| `QDRANT_API_KEY` | — | Required whenever `QDRANT_URL` points off-host. |
+| `QDRANT_ENABLED` | *(auto)* | Set to `1` / `true` to force-enable Qdrant. |
+| `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Embedding model for document indexing. |
+
+**LLM client**
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | — | Server-side provider credentials. |
+| `MEDISCAN_LLM_TIMEOUT` | `120` | Per-provider request timeout in seconds (forwarded to OpenAI, Anthropic, Gemini, and Ollama SDK clients). |
+| `MEDISCAN_LLM_RETRIES` | `3` | Tenacity `stop_after_attempt`. Transient-only: 4xx auth/validation errors are never retried. |
+| `MEDISCAN_ANTHROPIC_MAX_TOKENS` | `4096` | Anthropic `max_tokens`. |
+
+**Observability**
+
+| Variable | Default | Description |
+|---|---|---|
+| `LOG_LEVEL` | `INFO` | Structlog / stdlib logging level. |
+| `MEDISCAN_PROMETHEUS` | `0` | Set to `1` to mount the `/metrics` endpoint (requires `X-API-Key`). |
+| `MEDISCAN_OTEL` | `0` | Set to `1` to enable OpenTelemetry FastAPI auto-instrumentation. |
+| `MEDISCAN_GIT_SHA` | *(git)* | Overrides the commit SHA reported in lineage metadata. |
+
+**Service URLs**
+
+| Variable | Default | Description |
+|---|---|---|
+| `PADDLE_SERVICE_URL` | — | PaddleOCR-VL service-mode endpoint. Server-side only; never accepted from clients. |
 
 ## Known Limitations
 
 - **Bounding boxes** — Ollama-based OCR backends (GLM, DeepSeek) do not emit native bounding boxes. The Annotated, Overlay, and Bounding Boxes tabs in the UI are **empty** for these backends. Bounding box artifacts require PaddleOCR-VL (local or service mode).
-- **Semantic retrieval** — Qdrant retrieval is **disabled by default**. Unless `QDRANT_URL` and `QDRANT_ENABLED=true` are set and the Qdrant server is healthy, the retrieval path silently no-ops and contributes zero context. The API response includes `retrieval_enabled: false` when inactive.
-- **pgvector** — Scaffolded but not live. `is_configured()` always returns `False`. Qdrant is the only active retrieval backend.
+- **Semantic retrieval** — Qdrant retrieval is best-effort: if `QDRANT_URL` is unreachable or `MRN_HMAC_PEPPER` is unset, the retrieval path silently no-ops and contributes zero context. The API response includes `retrieval_enabled: false` when inactive.
+- **pgvector** — Scaffolded but not live. `PgvectorRetrievalStore.is_configured()` returns `False` by default. Qdrant is the only actively exercised retrieval backend.
 - **Patient history** — SQLite returns the latest prior record per MRN, not a full longitudinal timeline.
-- **Authentication** — The API has no auth layer and CORS is fully open. Not suitable for production without hardening.
-- **Human review** — The `human_review` graph node is a passthrough; production deployments should wire it to a ticketing system.
-- **Retry/backoff** — No automatic retry mechanism for LLM provider failures.
+- **Human review** — `/review/pending`, `/review/{id}/approve`, and `/review/{id}/reject` expose a queue backed by SQLite. There is no external ticketing integration (e.g. Jira, ServiceNow); production deployments would need to plug that in.
+- **Quality evaluation harness** — `tests/eval/` ships with metric implementations and correctness tests, but `tests/eval/gold/` is intentionally empty; contributors must add real gold JSON fixtures before `pytest -m eval` produces meaningful scores.
+- **Evaluation breadth** — The current harness measures OCR (CER), structured fields (set-F1), and MRN exact-match only. Retrieval relevance and end-to-end reasoning quality are not yet scored.
 
 ## Roadmap
 
 - [ ] Wire pgvector as a live retrieval backend with schema migration
-- [ ] Implement human-review pause point with external task/ticket emission
+- [ ] Integrate the review queue with an external ticketing system (Jira / ServiceNow / PagerDuty)
 - [ ] Add ICD-10 code normalization via lookup table
 - [ ] Introduce request-body Pydantic models for stronger API schema validation
 - [ ] Add longitudinal patient history view (full timeline per MRN)
-- [ ] Tighten CORS and add authentication for non-local deployments
-- [ ] Add provider retry/backoff with configurable policies
+- [ ] Contribute gold fixtures under `tests/eval/gold/` and enable the `-m eval` harness in CI
+- [ ] Extend the evaluation harness to retrieval relevance (recall@k / nDCG@k) and end-to-end reasoning quality
+- [ ] Wire graph-node and LLM-token metrics through to Prometheus / OpenTelemetry exporters
 
 ## License
 
@@ -307,51 +378,3 @@ This project is provided as-is for research and development purposes.
 Built with [FastAPI](https://fastapi.tiangolo.com) · [Streamlit](https://streamlit.io) · [LangGraph](https://langchain-ai.github.io/langgraph/) · [Qdrant](https://qdrant.tech) · [Ollama](https://ollama.com)
 
 </div>
-
-## Project Structure
-
-```text
-mediscan-ocr/
-├─ backend/
-│  ├─ ai_wrapper.py
-│  ├─ artifacts.py
-│  ├─ database.py
-│  ├─ extract.py
-│  ├─ logic.py
-│  ├─ main.py
-│  ├─ models.py
-│  ├─ ocr.py
-│  ├─ ocr_backends/
-│  │  ├─ base.py
-│  │  ├─ ollama_ocr.py
-│  │  ├─ paddleocr_vl.py
-│  │  └─ service_client.py
-│  ├─ retrieval/
-│  │  ├─ chunking.py
-│  │  ├─ embeddings.py
-│  │  ├─ pgvector_store.py
-│  │  ├─ qdrant_store.py
-│  │  └─ vector_store.py
-│  ├─ workflows/
-│  │  ├─ agentic_extraction.py
-│  │  └─ extraction_graph.py
-│  └─ uploads/
-├─ frontend/
-│  └─ app.py
-├─ tests/
-│  ├─ integration/
-│  │  └─ test_api_workflows.py
-│  └─ unit/
-│     ├─ test_ai_wrapper.py
-│     ├─ test_database.py
-│     ├─ test_extract.py
-│     ├─ test_extraction_graph.py
-│     ├─ test_logic.py
-│     ├─ test_main_unit.py
-│     ├─ test_models.py
-│     ├─ test_ocr_backends.py
-│     └─ test_retrieval.py
-├─ pytest.ini
-├─ requirements.txt
-└─ README.md
-```
