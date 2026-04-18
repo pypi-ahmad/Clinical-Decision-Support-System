@@ -316,7 +316,12 @@ def test_annotate_document_creates_annotated_images(tmp_path):
     assert Path(result.annotated_pdf_path).exists()
 
 
-def test_annotate_document_no_boxes_still_creates_image(tmp_path):
+def test_annotate_document_no_boxes_skips_image_work(tmp_path):
+    """When no bounding boxes are present ``annotate_document`` is a no-op.
+
+    This is a deliberate optimisation: Ollama/GLM/DeepSeek never produce
+    bboxes, so re-opening each page through Pillow would be pure overhead.
+    """
     from PIL import Image
     from backend.artifacts import annotate_document, DocumentWorkspace
 
@@ -335,7 +340,8 @@ def test_annotate_document_no_boxes_still_creates_image(tmp_path):
     (tmp_path / "ann").mkdir()
 
     result = annotate_document([str(image_path)], [], workspace)
-    assert len(result.annotated_image_paths) == 1
+    assert result.annotated_image_paths == []
+    assert result.annotated_pdf_path is None
 
 
 def test_annotate_document_missing_image_skipped(tmp_path):

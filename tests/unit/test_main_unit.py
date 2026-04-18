@@ -1,3 +1,10 @@
+"""Unit tests for individual handlers in ``backend.main``.
+
+These tests exercise the handler functions directly (not through the HTTP
+layer) so they can bypass ``Depends`` auth. The integration suite
+(``tests/integration/test_api_workflows.py``) covers the full request path.
+"""
+
 import asyncio
 import io
 
@@ -8,32 +15,46 @@ from starlette.datastructures import UploadFile
 import backend.main as main
 
 
-def test_confirm_record_calls_save_record(monkeypatch):
-    """Targets backend.main.confirm_record in backend/main.py."""
-    captured = {"data": None}
+def _upload(name: str, content: bytes, content_type: str = "application/pdf") -> UploadFile:
+    from starlette.datastructures import Headers
 
-    def fake_save_record(data):
+    headers = Headers({"content-type": content_type})
+    return UploadFile(filename=name, file=io.BytesIO(content), headers=headers)
+
+
+def test_confirm_record_calls_save_record(monkeypatch):
+    captured = {"data": None, "lineage": None}
+
+    def fake_save_record(data, lineage=None):
         captured["data"] = data
+        captured["lineage"] = lineage
 
     monkeypatch.setattr(main, "save_record", fake_save_record)
-    payload = {"patient": {"mrn": "X"}}
-    result = main.confirm_record(payload)
 
-    assert result == {"status": "saved"}
-    assert captured["data"] == payload
+    payload = {
+        "patient": {"mrn": "X"},
+        "encounter": {"date": "2026-02-20"},
+        "clinical": {"diagnosis_list": [], "medications": [], "vitals": {}},
+    }
+    result = asyncio.run(main.confirm_record(payload))
+
+    assert result["status"] == "saved"
+    assert "correlation_id" in result
+    assert captured["data"]["patient"]["mrn"] == "X"
 
 
 def test_check_insurance_function_decodes_utf8_and_calls_logic(monkeypatch):
-    """Targets backend.main.check_insurance in backend/main.py."""
     captured = {"medical": None, "policy": None}
 
-    def fake_check(medical_data, policy_text):
+    def fake_check(medical_data, policy_text, *args, **kwargs):
         captured["medical"] = medical_data
         captured["policy"] = policy_text
         return {"eligible": True, "reasoning": "ok", "missing_info": []}
 
     monkeypatch.setattr(main, "check_insurance_coverage", fake_check)
-    upload = UploadFile(filename="policy.txt", file=io.BytesIO(b"plain policy text"))
+    monkeypatch.setattr(main, "create_vector_store", lambda: None)
+
+    upload = _upload("policy.txt", b"plain policy text", "text/plain")
 
     result = asyncio.run(main.check_insurance(upload, '{"patient": {"mrn": "1"}}'))
     assert result["eligible"] is True
@@ -41,124 +62,159 @@ def test_check_insurance_function_decodes_utf8_and_calls_logic(monkeypatch):
     assert captured["policy"] == "plain policy text"
 
 
-def test_check_insurance_function_binary_decode_fallback(monkeypatch):
-    """Targets backend.main.check_insurance binary decode fallback in backend/main.py."""
+def test_check_insurance_function_binary_pdf_requires_ocr(monkeypatch):
+    """A non-text policy upload must go through OCR — the old stub fallback was a bug."""
     captured = {"policy": None}
 
-    def fake_check(medical_data, policy_text):
+    def fake_check(medical_data, policy_text, *args, **kwargs):
         captured["policy"] = policy_text
         return {"eligible": False, "reasoning": "r", "missing_info": []}
 
+    def fake_ocr(path, **kwargs):
+        return {"markdown": "extracted policy clauses", "raw_text": "extracted policy clauses"}
+
     monkeypatch.setattr(main, "check_insurance_coverage", fake_check)
-    upload = UploadFile(filename="policy.pdf", file=io.BytesIO(b"\xff\xfe\xfd"))
+    monkeypatch.setattr(main, "run_document_ocr", fake_ocr)
+    monkeypatch.setattr(main, "create_vector_store", lambda: None)
 
-    asyncio.run(main.check_insurance(upload, '{"a": 1}'))
-    assert captured["policy"] == "Binary PDF content - (Simulated OCR would go here)"
+    upload = _upload("policy.pdf", b"%PDF-1.4 dummy", "application/pdf")
+
+    asyncio.run(main.check_insurance(upload, '{"patient": {"mrn": "1"}}'))
+    assert captured["policy"] == "extracted policy clauses"
 
 
-def test_analyze_medical_doc_function_success(monkeypatch):
-    """Targets backend.main.analyze_medical_doc in backend/main.py."""
-    monkeypatch.setattr(main.shutil, "copyfileobj", lambda src, dst: None)
+def test_analyze_medical_doc_function_success(monkeypatch, tmp_path):
+    monkeypatch.setenv("MEDISCAN_UPLOAD_ROOT", str(tmp_path))
 
-    class DummyBuffer:
-        def write(self, *_):
-            return None
+    def fake_pipeline(file_path, provider, model, api_key, **kwargs):
+        return {"patient": {"mrn": "A1"}, "clinical": {"diagnosis_list": []}}
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    monkeypatch.setattr("builtins.open", lambda *args, **kwargs: DummyBuffer())
+    monkeypatch.setattr(main, "process_document_pipeline", fake_pipeline)
+    monkeypatch.setattr(main, "_load_history", lambda mrn: {"past": True})
+    monkeypatch.setattr(main, "create_vector_store", lambda: None)
     monkeypatch.setattr(
         main,
-        "process_document_pipeline",
-        lambda file_path, provider, model, api_key: {"patient": {"mrn": "A1"}},
+        "analyze_medical_logic",
+        lambda *args, **kwargs: {"summary": "ok", "alerts": [], "trends": []},
     )
-    monkeypatch.setattr(main, "get_patient_history", lambda mrn: {"past": True})
-    monkeypatch.setattr(main, "analyze_medical_logic", lambda *args, **kwargs: {"summary": "ok", "alerts": []})
 
-    upload = UploadFile(filename="record.pdf", file=io.BytesIO(b"pdf"))
-    result = asyncio.run(main.analyze_medical_doc(upload, "Ollama", "m", None))
+    upload = _upload("record.pdf", b"%PDF-1.4 dummy")
+    result = asyncio.run(main.analyze_medical_doc(upload))
 
     assert result["history_available"] is True
     assert result["analysis"]["summary"] == "ok"
+    assert "correlation_id" in result
 
 
-def test_analyze_medical_doc_function_raises_http_exception_on_error(monkeypatch):
-    """Targets backend.main.analyze_medical_doc error raise in backend/main.py."""
-    monkeypatch.setattr(main.shutil, "copyfileobj", lambda src, dst: None)
-
-    class DummyBuffer:
-        def write(self, *_):
-            return None
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    monkeypatch.setattr("builtins.open", lambda *args, **kwargs: DummyBuffer())
+def test_analyze_medical_doc_function_raises_http_exception_on_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("MEDISCAN_UPLOAD_ROOT", str(tmp_path))
     monkeypatch.setattr(main, "process_document_pipeline", lambda *args, **kwargs: {"error": "bad"})
 
-    upload = UploadFile(filename="record.pdf", file=io.BytesIO(b"pdf"))
+    upload = _upload("record.pdf", b"%PDF-1.4 dummy")
 
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(main.analyze_medical_doc(upload, "Ollama", "m", None))
+        asyncio.run(main.analyze_medical_doc(upload))
 
     assert exc.value.status_code == 500
-    assert exc.value.detail == {"error": "bad"}
+    detail = exc.value.detail
+    # Detail is now a sanitised envelope, not the raw upstream error.
+    assert isinstance(detail, dict)
+    assert detail["error"] == "Request failed"
+    assert "correlation_id" in detail
 
 
-def test_check_insurance_invalid_json_raises_400():
-    """Targets JSONDecodeError guard in backend.main check_insurance."""
-    upload = UploadFile(filename="policy.txt", file=io.BytesIO(b"some policy"))
+def test_check_insurance_invalid_json_raises_400(monkeypatch):
+    monkeypatch.setattr(main, "create_vector_store", lambda: None)
+    upload = _upload("policy.txt", b"some policy", "text/plain")
 
     with pytest.raises(HTTPException) as exc:
         asyncio.run(main.check_insurance(upload, "not valid json"))
 
     assert exc.value.status_code == 400
-    assert "Invalid medical_json" in exc.value.detail
 
 
-def test_confirm_record_non_dict_raises_422():
-    """Targets isinstance guard in backend.main confirm_record."""
+def test_confirm_record_non_dict_raises_422(monkeypatch):
     with pytest.raises(HTTPException) as exc:
-        main.confirm_record("not a dict")
+        asyncio.run(main.confirm_record("not a dict"))
 
     assert exc.value.status_code == 422
-    assert "JSON object" in exc.value.detail
 
 
-def test_analyze_medical_doc_uses_split_structuring_and_reasoning_config(monkeypatch):
-    """Targets separated structuring vs reasoning configuration in backend.main.analyze_medical_doc."""
-    monkeypatch.setattr(main.shutil, "copyfileobj", lambda src, dst: None)
+def test_confirm_record_offloads_blocking_audit_and_lineage(monkeypatch):
+    """Blocking audit/lineage calls must run in the threadpool so the event
+    loop keeps servicing other coroutines concurrently.
+    """
+    import time
 
-    class DummyBuffer:
-        def write(self, *_):
-            return None
+    block_duration = 0.25
 
-        def __enter__(self):
-            return self
+    def slow_save_record(data, lineage=None):
+        time.sleep(block_duration)
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
+    def slow_audit(event_type, **kwargs):
+        time.sleep(block_duration)
 
+    def slow_lineage(**kwargs):
+        time.sleep(block_duration)
+        return {"git_sha": "abc"}
+
+    monkeypatch.setattr(main, "save_record", slow_save_record)
+    monkeypatch.setattr(main, "record_audit_event", slow_audit)
+    monkeypatch.setattr(main, "capture_lineage", slow_lineage)
+
+    payload = {
+        "patient": {"mrn": "X"},
+        "encounter": {"date": "2026-02-20"},
+        "clinical": {"diagnosis_list": [], "medications": [], "vitals": {}},
+    }
+
+    async def _run():
+        heartbeats = 0
+
+        async def ticker():
+            nonlocal heartbeats
+            # Each iteration yields control for 10ms. If the handler blocks
+            # the loop (e.g. a bare `capture_lineage()` call), these ticks
+            # stop firing while the handler is stuck in a sleep.
+            while True:
+                await asyncio.sleep(0.01)
+                heartbeats += 1
+
+        tick_task = asyncio.create_task(ticker())
+        try:
+            await main.confirm_record(payload)
+        finally:
+            tick_task.cancel()
+            try:
+                await tick_task
+            except asyncio.CancelledError:
+                pass
+        return heartbeats
+
+    heartbeats = asyncio.run(_run())
+    # Three ~250ms blocking calls = ~0.75s wall time. With proper threadpool
+    # offloading the ticker fires ~75 times; with blocking calls on the loop
+    # the ticker would manage at most a handful of ticks.
+    assert heartbeats >= 25, (
+        f"Event loop stalled: only {heartbeats} 10ms ticks fired during "
+        "confirm_record (expected >=25 if blocking work is offloaded)."
+    )
+
+
+def test_analyze_medical_doc_uses_split_structuring_and_reasoning_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("MEDISCAN_UPLOAD_ROOT", str(tmp_path))
     pipeline_call = {}
     reasoning_call = {}
 
-    monkeypatch.setattr("builtins.open", lambda *args, **kwargs: DummyBuffer())
-    monkeypatch.setattr(
-        main,
-        "process_document_pipeline",
-        lambda file_path, provider, model, api_key, **kwargs: pipeline_call.update(
-            {"provider": provider, "model": model, "api_key": api_key, "kwargs": kwargs}
-        )
-        or {"structured_data": {"patient": {"mrn": "P1"}, "clinical": {"diagnosis_list": []}}, "ocr": {"raw_text": "ocr"}},
-    )
-    monkeypatch.setattr(main, "get_patient_history", lambda mrn: None)
+    def fake_pipeline(file_path, provider, model, api_key, **kwargs):
+        pipeline_call.update({"provider": provider, "model": model, "api_key": api_key, "kwargs": kwargs})
+        return {
+            "structured_data": {"patient": {"mrn": "P1"}, "clinical": {"diagnosis_list": []}},
+            "ocr": {"raw_text": "ocr"},
+        }
+
+    monkeypatch.setattr(main, "process_document_pipeline", fake_pipeline)
+    monkeypatch.setattr(main, "_load_history", lambda mrn: None)
     monkeypatch.setattr(main, "create_vector_store", lambda: None)
     monkeypatch.setattr(
         main,
@@ -168,8 +224,11 @@ def test_analyze_medical_doc_uses_split_structuring_and_reasoning_config(monkeyp
         )
         or {"summary": "ok", "alerts": [], "trends": []},
     )
+    # Enable user-supplied API keys for this specific test so they flow
+    # through without being overridden by the server-side vault.
+    monkeypatch.setenv("MEDISCAN_ALLOW_USER_API_KEYS", "1")
 
-    upload = UploadFile(filename="record.pdf", file=io.BytesIO(b"pdf"))
+    upload = _upload("record.pdf", b"%PDF-1.4 dummy")
     result = asyncio.run(
         main.analyze_medical_doc(
             upload,

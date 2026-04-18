@@ -2,9 +2,9 @@ import backend.extract as extract
 
 
 def test_process_document_pipeline_image_success(monkeypatch, tmp_path):
-    """Targets backend.extract.process_document_pipeline image branch in backend/extract.py."""
     image_file = tmp_path / "doc.jpg"
     image_file.write_bytes(b"dummy")
+    monkeypatch.setenv("MEDISCAN_UPLOAD_ROOT", str(tmp_path))
 
     monkeypatch.setattr(
         extract,
@@ -14,7 +14,7 @@ def test_process_document_pipeline_image_success(monkeypatch, tmp_path):
     monkeypatch.setattr(
         extract,
         "get_ai_response",
-        lambda provider, model, api_key, system_prompt, user_text: '{"patient": {}, "encounter": {}, "clinical": {"diagnosis_list": [], "medications": [], "vitals": {}}}',
+        lambda *args, **kwargs: '{"patient": {}, "encounter": {}, "clinical": {"diagnosis_list": [], "medications": [], "vitals": {}}}',
     )
 
     result = extract.process_document_pipeline(str(image_file), "Ollama", "m", None)
@@ -23,11 +23,11 @@ def test_process_document_pipeline_image_success(monkeypatch, tmp_path):
 
 
 def test_process_document_pipeline_pdf_conversion_failure(monkeypatch, tmp_path):
-    """Targets backend.extract.process_document_pipeline PDF conversion error path in backend/extract.py."""
     pdf_file = tmp_path / "doc.pdf"
     pdf_file.write_bytes(b"%PDF")
+    monkeypatch.setenv("MEDISCAN_UPLOAD_ROOT", str(tmp_path))
 
-    def raise_conversion(_):
+    def raise_conversion(*_args, **_kwargs):
         raise RuntimeError("poppler missing")
 
     monkeypatch.setattr(extract, "convert_from_path", raise_conversion)
@@ -37,9 +37,9 @@ def test_process_document_pipeline_pdf_conversion_failure(monkeypatch, tmp_path)
 
 
 def test_process_document_pipeline_ocr_failure(monkeypatch, tmp_path):
-    """Targets backend.extract.process_document_pipeline OCR error path in backend/extract.py."""
     image_file = tmp_path / "doc.jpg"
     image_file.write_bytes(b"dummy")
+    monkeypatch.setenv("MEDISCAN_UPLOAD_ROOT", str(tmp_path))
 
     def raise_ocr(**kwargs):
         raise RuntimeError("ocr unavailable")
@@ -52,11 +52,11 @@ def test_process_document_pipeline_ocr_failure(monkeypatch, tmp_path):
 
 
 def test_process_document_pipeline_pdf_success(monkeypatch, tmp_path):
-    """Targets backend.extract.process_document_pipeline PDF success path in backend/extract.py."""
     from unittest.mock import MagicMock
 
     pdf_file = tmp_path / "doc.pdf"
     pdf_file.write_bytes(b"%PDF")
+    monkeypatch.setenv("MEDISCAN_UPLOAD_ROOT", str(tmp_path))
 
     mock_image = MagicMock()
     monkeypatch.setattr(extract, "convert_from_path", lambda path, **kwargs: [mock_image])
@@ -68,7 +68,7 @@ def test_process_document_pipeline_pdf_success(monkeypatch, tmp_path):
     monkeypatch.setattr(
         extract,
         "get_ai_response",
-        lambda provider, model, api_key, system_prompt, user_text: '{"patient": {}, "encounter": {}, "clinical": {"diagnosis_list": [], "medications": [], "vitals": {}}}',
+        lambda *args, **kwargs: '{"patient": {}, "encounter": {}, "clinical": {"diagnosis_list": [], "medications": [], "vitals": {}}}',
     )
 
     result = extract.process_document_pipeline(str(pdf_file), "Ollama", "m", None)
@@ -78,9 +78,9 @@ def test_process_document_pipeline_pdf_success(monkeypatch, tmp_path):
 
 
 def test_process_document_pipeline_structuring_failure_returns_raw_text(monkeypatch, tmp_path):
-    """Targets backend.extract.process_document_pipeline structuring error path in backend/extract.py."""
     image_file = tmp_path / "doc.png"
     image_file.write_bytes(b"dummy")
+    monkeypatch.setenv("MEDISCAN_UPLOAD_ROOT", str(tmp_path))
 
     monkeypatch.setattr(
         extract,
@@ -88,7 +88,7 @@ def test_process_document_pipeline_structuring_failure_returns_raw_text(monkeypa
         type("DummyOllama", (), {"chat": staticmethod(lambda **kwargs: {"message": {"content": "raw-ocr"}})}),
     )
 
-    def raise_structuring(provider, model, api_key, system_prompt, user_text):
+    def raise_structuring(*args, **kwargs):
         raise RuntimeError("bad model response")
 
     monkeypatch.setattr(extract, "get_ai_response", raise_structuring)
@@ -100,11 +100,11 @@ def test_process_document_pipeline_structuring_failure_returns_raw_text(monkeypa
 
 
 def test_run_document_ocr_returns_multi_page_payload(monkeypatch, tmp_path):
-    """Targets backend.extract.run_document_ocr multi-page OCR contract."""
     from unittest.mock import MagicMock
 
     pdf_file = tmp_path / "multipage.pdf"
     pdf_file.write_bytes(b"%PDF")
+    monkeypatch.setenv("MEDISCAN_UPLOAD_ROOT", str(tmp_path))
 
     mock_page_one = MagicMock()
     mock_page_two = MagicMock()

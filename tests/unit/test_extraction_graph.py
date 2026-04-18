@@ -255,7 +255,7 @@ def test_extract_candidate_fields_node_calls_structuring_llm(monkeypatch):
     monkeypatch.setattr(
         eg,
         "get_ai_response",
-        lambda provider, model, key, sys, user: '{"patient": {}, "encounter": {}, "clinical": {}}',
+        lambda provider, model, key, sys, user, **kwargs: '{"patient": {}, "encounter": {}, "clinical": {}}',
     )
     monkeypatch.setattr(eg, "clean_json_output", lambda s: s)
     state = eg._extract_candidate_fields_node(
@@ -459,7 +459,7 @@ def test_compiled_extraction_graph_runs_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(
         eg,
         "get_ai_response",
-        lambda prov, model, key, sys, user: '{"patient": {"full_name": "John Doe", "mrn": "MRN-1"}, "encounter": {"date": "2024-06-01"}, "clinical": {"diagnosis_list": ["HTN"], "medications": [], "vitals": {"bp": "130/85"}}}',
+        lambda prov, model, key, sys, user, **kwargs: '{"patient": {"full_name": "John Doe", "mrn": "MRN-1"}, "encounter": {"date": "2024-06-01"}, "clinical": {"diagnosis_list": ["HTN"], "medications": [], "vitals": {"bp": "130/85"}}}',
     )
     monkeypatch.setattr(eg, "clean_json_output", lambda s: s)
     monkeypatch.setattr(eg, "create_vector_store", lambda: None)

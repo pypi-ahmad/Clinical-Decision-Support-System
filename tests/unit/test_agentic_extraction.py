@@ -67,7 +67,10 @@ def test_validate_structured_data_node_valid():
 
 
 def test_validate_structured_data_node_invalid():
-    state = ae._validate_structured_data_node({"structured_data": {"bad": True}})
+    # The hardened schema is intentionally lenient on extra keys (OCR is
+    # noisy) but rejects fundamentally wrong types — e.g. a string where a
+    # nested object is expected.
+    state = ae._validate_structured_data_node({"structured_data": {"patient": "not-an-object"}})
     assert len(state["validation_errors"]) > 0
 
 

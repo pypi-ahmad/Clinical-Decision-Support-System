@@ -82,6 +82,30 @@ def test_hash_identifier_returns_none_for_empty():
     assert hash_identifier("   ") is None
 
 
+def test_hash_identifier_is_keyed_by_pepper(monkeypatch):
+    """Changing the pepper must change the digest — proves it's HMAC, not SHA."""
+    import hashlib
+
+    monkeypatch.setenv("MRN_HMAC_PEPPER", "pepper-A")
+    digest_a = hash_identifier("MRN-001")
+    monkeypatch.setenv("MRN_HMAC_PEPPER", "pepper-B")
+    digest_b = hash_identifier("MRN-001")
+
+    assert digest_a != digest_b
+    # And must not equal the plain unsalted SHA-256 of the MRN.
+    plain_sha = hashlib.sha256(b"MRN-001").hexdigest()
+    assert digest_a != plain_sha
+    assert digest_b != plain_sha
+
+
+def test_hash_identifier_returns_none_without_pepper(monkeypatch):
+    """No pepper => no digest. No plain-SHA256 fallback is permitted."""
+    monkeypatch.delenv("MRN_HMAC_PEPPER", raising=False)
+    # Even if a legacy weak-hash opt-in is set, it must be ignored.
+    monkeypatch.setenv("MEDISCAN_ALLOW_WEAK_HASH", "1")
+    assert hash_identifier("MRN-001") is None
+
+
 # ---------------------------------------------------------------------------
 # split_text_to_chunks
 # ---------------------------------------------------------------------------
@@ -321,8 +345,10 @@ def test_qdrant_store_upsert_mocked_client(monkeypatch):
     # Mock the embeddings function to return fixed vectors
     monkeypatch.setattr(qs, "embed_texts", lambda texts, model=None: [[0.1, 0.2, 0.3]] * len(texts))
 
-    # Create a store but mock out the actual client
+    # Create a store but mock out the actual client. For a non-local URL the
+    # hardened client now requires an API key.
     monkeypatch.setenv("QDRANT_URL", "http://fake:6333")
+    monkeypatch.setenv("QDRANT_API_KEY", "test-key")
 
     upserted = {}
 
@@ -367,6 +393,7 @@ def test_qdrant_store_search_mocked_client(monkeypatch):
 
     monkeypatch.setattr(qs, "embed_texts", lambda texts, model=None: [[0.1, 0.2, 0.3]])
     monkeypatch.setenv("QDRANT_URL", "http://fake:6333")
+    monkeypatch.setenv("QDRANT_API_KEY", "test-key")
 
     class FakeHit:
         def __init__(self):
@@ -377,6 +404,14 @@ def test_qdrant_store_search_mocked_client(monkeypatch):
         def __init__(self, **kwargs):
             pass
 
+        def query_points(self, collection_name, query, query_filter, limit, with_payload=True):
+            # New query_points API returns an object with ``.points``.
+            class Result:
+                points = [FakeHit()]
+
+            return Result
+
+        # Keep legacy search available as a fallback for older fixtures.
         def search(self, collection_name, query_vector, query_filter, limit):
             return [FakeHit()]
 

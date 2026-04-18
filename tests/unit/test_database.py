@@ -44,21 +44,24 @@ def test_save_record_inserts_expected_payload(tmp_path, monkeypatch):
 
 
 def test_save_record_defaults_unknown_when_fields_missing(tmp_path, monkeypatch):
-    """Targets backend.database.save_record fallback values in backend/database.py."""
-    db_file = tmp_path / "records.db"
-    monkeypatch.setattr(database, "DB_PATH", str(db_file))
+    """Targets backend.database.save_record fallback values in backend/database.py.
+
+    The hardened schema now stores ``date=None`` instead of a literal
+    ``"UNKNOWN"`` string when the payload omits the field — the column is
+    nullable and downstream ordering tolerates NULLs.
+    """
     database.init_db()
 
     database.save_record({})
 
-    conn = sqlite3.connect(str(db_file))
+    conn = sqlite3.connect(database.DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT mrn, date FROM records")
     mrn, date = cur.fetchone()
     conn.close()
 
     assert mrn == "UNKNOWN"
-    assert date == "UNKNOWN"
+    assert date is None
 
 
 def test_get_patient_history_returns_latest_by_date_desc(tmp_path, monkeypatch):
@@ -83,3 +86,34 @@ def test_get_patient_history_returns_none_when_missing(tmp_path, monkeypatch):
     database.init_db()
 
     assert database.get_patient_history("NOPE") is None
+
+
+def test_connection_applies_safety_pragmas(tmp_path, monkeypatch):
+    """Regression: the cached connection must enable WAL + safety pragmas."""
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "records.db"))
+    monkeypatch.setattr(database, "_conn", None)
+
+    conn = database._get_connection()
+
+    # Journaling / durability
+    assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    assert int(conn.execute("PRAGMA synchronous").fetchone()[0]) == 1  # NORMAL
+    assert int(conn.execute("PRAGMA busy_timeout").fetchone()[0]) >= 5000
+
+    # Integrity
+    assert int(conn.execute("PRAGMA foreign_keys").fetchone()[0]) == 1
+    assert int(conn.execute("PRAGMA trusted_schema").fetchone()[0]) == 0
+
+    # PHI hygiene
+    assert int(conn.execute("PRAGMA secure_delete").fetchone()[0]) == 1
+    assert int(conn.execute("PRAGMA temp_store").fetchone()[0]) == 2  # MEMORY
+
+
+def test_connection_is_cached_and_reused(tmp_path, monkeypatch):
+    """Regression: repeat calls must reuse the same connection object."""
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "records.db"))
+    monkeypatch.setattr(database, "_conn", None)
+
+    first = database._get_connection()
+    second = database._get_connection()
+    assert first is second
