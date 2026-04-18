@@ -1,0 +1,69 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mediscan/cdss-backend:local
+    environment:
+      MEDISCAN_API_KEY: ${MEDISCAN_API_KEY:-changeme}
+      MEDISCAN_ALLOWED_ORIGINS: http://localhost:8501
+      MEDISCAN_RATE_LIMIT: "1"
+      MEDISCAN_DEFAULT_RATE: 60/minute
+      MRN_HMAC_PEPPER: ${MRN_HMAC_PEPPER:-dev-pepper-change-me}
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_ENABLED: "1"
+      OLLAMA_HOST: http://ollama:11434
+      MEDISCAN_DB_PATH: /data/medical_records.db
+      MEDISCAN_UPLOAD_ROOT: /data/uploads
+    ports:
+      - "8000:8000"
+    volumes:
+      - mediscan-data:/data
+    depends_on:
+      - qdrant
+      - ollama
+    restart: unless-stopped
+
+  frontend:
+    image: mediscan/cdss-backend:local
+    command:
+      - sh
+      - -c
+      - "streamlit run frontend/app.py --server.address=0.0.0.0 --server.port=8501"
+    environment:
+      MEDISCAN_API_URL: http://backend:8000
+      MEDISCAN_API_KEY: ${MEDISCAN_API_KEY:-changeme}
+    ports:
+      - "8501:8501"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+    # GPU users: uncomment the deploy block below (requires nvidia-container-toolkit).
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+volumes:
+  mediscan-data:
+  qdrant-data:
+  ollama-models:

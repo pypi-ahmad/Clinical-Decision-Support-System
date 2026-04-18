@@ -1,0 +1,24 @@
+# docker
+.git
+.gitignore
+.github
+.venv
+venv
+env
+.pytest_cache
+.coverage
+.coverage.*
+htmlcov
+*.pyc
+__pycache__
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/medical_records.db
+*.sqlite3
+tests
+.claude
+.idea
+.vscode
+README.quickstart.md
+TEST_REPORT.md
+USAGE.md

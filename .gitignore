@@ -36,10 +36,20 @@ backend/medical_records.db
 backend/uploads/*
 !backend/uploads/.gitkeep
 
+# Coverage / test artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
+
 # IDE Settings
 .vscode/
 .idea/
 *.swp
+
+# Local AI tooling (Claude Code, Copilot, etc.)
+.claude/
 
 # OS Junk
 .DS_Store

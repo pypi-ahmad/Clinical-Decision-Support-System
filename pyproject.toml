@@ -1,0 +1,101 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mediscan-cdss"
+version = "0.1.0"
+description = "Clinical Decision Support System — OCR + LLM extraction and reasoning over clinical documents."
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "Proprietary" }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["backend*"]
+exclude = ["tests*", "frontend*"]
+
+# ---------------------------------------------------------------------------
+# Ruff (lint + import sort)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = [
+    "backend/uploads",
+    ".venv",
+    ".pytest_cache",
+]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle + pyflakes
+    "I",              # isort
+    "B",              # flake8-bugbear
+    "UP",             # pyupgrade
+    "S",              # bandit
+    "N",              # pep8-naming
+    "SIM",            # flake8-simplify
+    "RUF",            # ruff-specific
+]
+ignore = [
+    "E501",   # line-length handled by formatter
+    "S101",   # allow assert in tests
+    "B008",   # FastAPI uses Depends()/Form() as defaults by design
+    "N812",   # allow lowercase import aliasing (ollama, etc.)
+    "S110",   # intentional try/except/pass in a few audit-safe places
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S", "N802", "N803"]
+"backend/ai_wrapper.py" = ["S110"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ---------------------------------------------------------------------------
+# mypy (gradual; strict only on core modules)
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+warn_return_any = false
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+ignore_missing_imports = true
+exclude = [
+    "tests/",
+    "frontend/",
+    "backend/uploads/",
+]
+
+[[tool.mypy.overrides]]
+module = ["backend.security", "backend.database", "backend.retrieval.*"]
+disallow_untyped_defs = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra --strict-markers --cov=backend --cov-report=term-missing"
+testpaths = ["tests"]
+markers = [
+    "live: tests that require external services (Ollama/Qdrant/Paddle)",
+    "eval: slow quality-evaluation tests (CER/field-F1)",
+]
+
+[tool.coverage.run]
+source = ["backend"]
+branch = true
+omit = ["backend/uploads/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
