@@ -11,13 +11,24 @@ This is the user interface for MediScan AI. It renders a web application allowin
 It communicates with the FastAPI backend via HTTP requests.
 """
 
+import os
+
 import streamlit as st
 import requests
 import json
 import pandas as pd
 from streamlit_pdf_viewer import pdf_viewer
 
-API_URL = "http://localhost:8000"
+API_URL = os.environ.get("MEDISCAN_API_URL", "http://localhost:8000")
+API_KEY = os.environ.get("MEDISCAN_API_KEY", "")
+# Long-running OCR + LLM extraction can take several minutes for multi-page
+# PDFs on CPU Ollama. The previous default of 60s produced spurious
+# "Connection Error" toasts mid-analysis.
+DEFAULT_TIMEOUT = int(os.environ.get("MEDISCAN_CLIENT_TIMEOUT", "600"))
+
+
+def _auth_headers() -> dict[str, str]:
+    return {"X-API-Key": API_KEY} if API_KEY else {}
 PROVIDER_MODELS = {
     "Ollama": ["glm-4.7-flash", "lfm2.5-thinking", "llama3"],
     "OpenAI": ["gpt-4o", "gpt-3.5-turbo", "gpt-4-turbo"],
@@ -90,7 +101,7 @@ def fetch_artifact_bytes(path: str | None) -> bytes | None:
     if not url:
         return None
     try:
-        response = requests.get(url, timeout=60)
+        response = requests.get(url, timeout=DEFAULT_TIMEOUT, headers=_auth_headers())
         response.raise_for_status()
         return response.content
     except Exception:
@@ -143,7 +154,6 @@ with st.sidebar:
 
     ocr_backend = "ollama"
     ocr_model = "deepseek-ocr"
-    paddle_service_url = None
     if ocr_backend_option == "GLM-OCR (Ollama)":
         ocr_backend = "glm"
         ocr_model = "glm-ocr"
@@ -153,7 +163,10 @@ with st.sidebar:
     elif ocr_backend_option == "PaddleOCR-VL-1.5 (Local Service)":
         ocr_backend = "paddle"
         ocr_model = "PaddlePaddle/PaddleOCR-VL-1.5"
-        paddle_service_url = st.text_input("PaddleOCR-VL Service URL", value="http://127.0.0.1:8118/v1")
+        st.caption(
+            "Service URL is server-configured (PADDLE_SERVICE_URL env var on the backend). "
+            "Contact your administrator to change it."
+        )
 
     structuring_provider, structuring_model, structuring_api_key = render_model_config(
         "Structuring",
@@ -184,13 +197,18 @@ with st.sidebar:
                 "ocr_model": ocr_model,
                 "ocr_mode": ocr_prompt_mode,
                 "use_gpu": str(use_gpu).lower(),
-                "paddle_service_url": paddle_service_url if paddle_service_url else "",
                 "agentic_mode": str(agentic_mode).lower(),
                 "extraction_graph_mode": str(extraction_graph_mode).lower(),
             }
             try:
                 # Call Backend API
-                response = requests.post(f"{API_URL}/analyze", files=files, data=data, timeout=60)
+                response = requests.post(
+                    f"{API_URL}/analyze",
+                    files=files,
+                    data=data,
+                    timeout=DEFAULT_TIMEOUT,
+                    headers=_auth_headers(),
+                )
                 if response.status_code == 200:
                     data = response.json()
                     # Update Session State
@@ -306,7 +324,12 @@ with tab1:
             
             if st.button("💾 Confirm & Save to Database"):
                 try:
-                    save_response = requests.post(f"{API_URL}/confirm", json=edited_data, timeout=60)
+                    save_response = requests.post(
+                        f"{API_URL}/confirm",
+                        json=edited_data,
+                        timeout=DEFAULT_TIMEOUT,
+                        headers=_auth_headers(),
+                    )
                     if save_response.status_code == 200:
                         st.toast("Record Saved successfully!", icon="✅")
                     else:
@@ -425,12 +448,17 @@ with tab4:
                     "ocr_model": ocr_model,
                     "ocr_mode": ocr_prompt_mode,
                     "use_gpu": str(use_gpu).lower(),
-                    "paddle_service_url": paddle_service_url if paddle_service_url else "",
                     "policy_ocr": str(policy_file.type != "text/plain").lower(),
                 }
                 
                 try:
-                    res = requests.post(f"{API_URL}/check_insurance", files=files, data=payload, timeout=60)
+                    res = requests.post(
+                        f"{API_URL}/check_insurance",
+                        files=files,
+                        data=payload,
+                        timeout=DEFAULT_TIMEOUT,
+                        headers=_auth_headers(),
+                    )
                     if res.status_code == 200:
                         result = res.json()
                         
