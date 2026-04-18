@@ -1,16 +1,89 @@
+"""Text chunking utilities.
+
+The chunker favours **paragraph and sentence boundaries** over a naive
+character window so chunks stay semantically coherent. Sizes are configurable
+via ``MEDISCAN_CHUNK_SIZE`` / ``MEDISCAN_CHUNK_OVERLAP``.
+"""
+
 from __future__ import annotations
 
+import os
+import re
 import uuid
 from typing import Any
 
 from backend.retrieval.vector_store import RetrievalChunk
 
 
-def split_text_to_chunks(text: str, chunk_size: int = 1200, chunk_overlap: int = 150) -> list[str]:
+DEFAULT_CHUNK_SIZE = int(os.environ.get("MEDISCAN_CHUNK_SIZE", 1200))
+DEFAULT_CHUNK_OVERLAP = int(os.environ.get("MEDISCAN_CHUNK_OVERLAP", 150))
+
+# Progressive separators: paragraph > newline > sentence > space > char.
+_SEPARATORS = ["\n\n", "\n", ". ", " ", ""]
+
+# Prompt-injection neutraliser. Strip common override phrases before we send
+# retrieved chunks back into an LLM prompt as "context".
+_INJECTION_PATTERNS = [
+    re.compile(r"\bignore (?:all )?(?:previous|prior|above) (?:instructions|messages|prompts)\b", re.IGNORECASE),
+    re.compile(r"\b(?:system|assistant|user)\s*:", re.IGNORECASE),
+    re.compile(r"<<<UNTRUSTED_DOCUMENT_[a-f0-9]+_(?:BEGIN|END)>>>", re.IGNORECASE),
+]
+
+
+def sanitize_retrieved_text(text: str) -> str:
+    """Replace likely prompt-injection tokens with a safe marker."""
+    cleaned = text
+    for pattern in _INJECTION_PATTERNS:
+        cleaned = pattern.sub("[REDACTED_PROMPT_FRAGMENT]", cleaned)
+    return cleaned
+
+
+def _split_by_separator(text: str, separator: str) -> list[str]:
+    if separator == "":
+        # Last-resort fixed-size slicing
+        return [text[i : i + DEFAULT_CHUNK_SIZE] for i in range(0, len(text), DEFAULT_CHUNK_SIZE)]
+    parts = text.split(separator)
+    return [part + (separator if separator and idx < len(parts) - 1 else "") for idx, part in enumerate(parts)]
+
+
+def _assemble(parts: list[str], chunk_size: int, chunk_overlap: int) -> list[str]:
+    chunks: list[str] = []
+    current = ""
+    for part in parts:
+        if not part:
+            continue
+        if len(current) + len(part) <= chunk_size:
+            current += part
+            continue
+        if current:
+            chunks.append(current)
+        # Start next chunk with an overlap tail from the previous chunk.
+        tail = current[-chunk_overlap:] if chunk_overlap and current else ""
+        current = tail + part
+        # Guard against pathological single parts larger than chunk_size.
+        while len(current) > chunk_size:
+            chunks.append(current[:chunk_size])
+            current = current[chunk_size - chunk_overlap :]
+    if current.strip():
+        chunks.append(current)
+    return chunks
+
+
+def split_text_to_chunks(
+    text: str,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
+) -> list[str]:
     normalized = text.strip()
     if not normalized:
         return []
 
+    for separator in _SEPARATORS:
+        parts = _split_by_separator(normalized, separator)
+        if all(len(part) <= chunk_size for part in parts):
+            return _assemble(parts, chunk_size, chunk_overlap)
+
+    # Final fallback: sliding window
     chunks: list[str] = []
     start = 0
     while start < len(normalized):

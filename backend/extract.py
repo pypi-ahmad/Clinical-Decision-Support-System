@@ -1,16 +1,27 @@
+"""Direct extraction pipeline: OCR -> structuring LLM."""
+
+from __future__ import annotations
+
 import json
+from typing import Any
 
 import ollama
 from pdf2image import convert_from_path
 
-from backend.ai_wrapper import get_ai_response, clean_json_output
+from backend.ai_wrapper import AIProviderError, get_ai_response, parse_model_json
 from backend.artifacts import create_document_workspace, render_document_pages
+from backend.logging_config import get_logger
 from backend.ocr import OCRBackendError, materialize_annotations, run_ocr
+from backend.pii_scrub import scrub_text
+from backend.retrieval.chunking import sanitize_retrieved_text
+from backend.security import firewall_clause, generate_boundary_nonce, wrap_untrusted
 
-# System prompt defining the target JSON schema for the Structuring phase
-SYSTEM_PROMPT = """
-You are a medical data entry specialist. Convert the text below into valid JSON matching this schema:
-{
+
+_logger = get_logger(__name__)
+
+
+_STRUCTURING_SCHEMA_DOC = (
+    """{
   "patient": {"full_name": "string", "dob": "YYYY-MM-DD", "mrn": "string"},
   "encounter": {"date": "YYYY-MM-DD", "provider": "string", "facility": "string"},
   "clinical": {
@@ -18,51 +29,49 @@ You are a medical data entry specialist. Convert the text below into valid JSON 
     "medications": [{"name": "string", "dosage": "string", "frequency": "string"}],
     "vitals": {"bp": "string", "hr": "string", "temp": "string", "weight": "string"}
   }
-}
-Return ONLY JSON.
-"""
+}"""
+)
+
+
+def _build_structuring_system_prompt(nonce: str) -> str:
+    return (
+        "You are a medical data entry specialist. Convert the document content "
+        "delimited below into a JSON object that matches this schema exactly:\n"
+        f"{_STRUCTURING_SCHEMA_DOC}\n\n"
+        "Return ONLY the JSON object — no markdown, no commentary.\n"
+        f"{firewall_clause(nonce)}"
+    )
+
 
 def process_document_pipeline(
     file_path: str,
-    provider="Ollama",
-    model="glm-4.7-flash",
-    api_key=None,
-    ocr_backend="ollama",
-    ocr_model=None,
-    ocr_prompt_mode="text",
-    use_gpu=True,
-    paddle_service_url=None,
-    return_details=False,
-    structuring_provider=None,
-    structuring_model=None,
-    structuring_api_key=None,
+    provider: str = "Ollama",
+    model: str = "glm-4.7-flash",
+    api_key: str | None = None,
+    *,
+    ocr_backend: str = "ollama",
+    ocr_model: str | None = None,
+    ocr_prompt_mode: str = "text",
+    use_gpu: bool = True,
+    paddle_service_url: str | None = None,
+    return_details: bool = False,
+    structuring_provider: str | None = None,
+    structuring_model: str | None = None,
+    structuring_api_key: str | None = None,
 ):
-    """
-    Orchestrates the full extraction pipeline:
-    1. Pre-processing: Converts PDF to Image if necessary.
-    2. OCR (The Eye): Uses the selected OCR backend (Ollama DeepSeek, Ollama GLM, or PaddleOCR-VL) to read the document.
-    3. Structuring (The Clerk): Uses the selected AI Provider/Model to format text into JSON.
+    """Orchestrate OCR + structuring.
 
-    Args:
-        file_path (str): Absolute path to the uploaded file.
-        provider (str): AI provider for the structuring phase.
-        model (str): AI model name for the structuring phase.
-        api_key (str): Optional API key for cloud providers.
-        ocr_backend (str): OCR backend to use: ollama, glm, or paddle.
-        ocr_model (str | None): Optional OCR model override.
-        ocr_prompt_mode (str): OCR task prompt mode.
-        use_gpu (bool): Whether GPU/CUDA should be preferred for OCR backends that support it.
-        paddle_service_url (str | None): Optional local PaddleOCR-VL service URL.
-        return_details (bool): When true, returns OCR artifacts alongside the structured data.
-
-    Returns:
-        dict: The structured JSON data or an error dictionary.
+    Either the legacy positional triple ``(provider, model, api_key)`` or the
+    explicit ``structuring_*`` kwargs can be used. The structuring_* kwargs
+    take precedence when both are supplied.
     """
     resolved_structuring_provider = structuring_provider or provider
     resolved_structuring_model = structuring_model or model
-    resolved_structuring_api_key = structuring_api_key if structuring_api_key is not None else api_key
+    resolved_structuring_api_key = (
+        structuring_api_key if structuring_api_key is not None else api_key
+    )
 
-    print(f"👀 OCR Scanning: {file_path}")
+    _logger.info("ocr_scanning", backend=ocr_backend, model=ocr_model)
     ocr_payload = run_document_ocr(
         file_path,
         ocr_backend=ocr_backend,
@@ -75,51 +84,57 @@ def process_document_pipeline(
         return ocr_payload
 
     raw_text = ocr_payload.get("markdown") or ocr_payload.get("raw_text") or ""
-    print(f"✅ OCR Success. Raw Text Length: {len(raw_text)}")
+    _logger.info("ocr_complete", raw_text_length=len(raw_text))
 
-    print(f"📝 Structuring Data with {resolved_structuring_provider} ({resolved_structuring_model})...")
+    _logger.info(
+        "structuring_start",
+        provider=resolved_structuring_provider,
+        model=resolved_structuring_model,
+    )
     try:
-        user_text = _build_structuring_input(ocr_payload)
+        user_text, nonce = _build_structuring_user_input(
+            ocr_payload, provider=resolved_structuring_provider
+        )
         raw_response = get_ai_response(
             resolved_structuring_provider,
             resolved_structuring_model,
             resolved_structuring_api_key,
-            SYSTEM_PROMPT,
+            _build_structuring_system_prompt(nonce),
             user_text,
+            force_json=True,
         )
 
-        json_str = clean_json_output(raw_response)
-        structured_data = json.loads(json_str)
+        structured_data = parse_model_json(raw_response)
         if return_details:
-            return {
-                "structured_data": structured_data,
-                "ocr": ocr_payload,
-            }
+            return {"structured_data": structured_data, "ocr": ocr_payload}
         return structured_data
-    except Exception as e:
-        return {"error": f"Structuring failed: {str(e)}"}
+    except AIProviderError as exc:
+        return {"error": f"Structuring failed: {exc.detail}"}
+    except Exception as exc:
+        _logger.warning("structuring_failed", reason=str(exc))
+        return {"error": "Structuring failed"}
 
 
 def run_document_ocr(
     file_path: str,
-    ocr_backend="ollama",
-    ocr_model=None,
-    ocr_prompt_mode="text",
-    use_gpu=True,
-    paddle_service_url=None,
+    ocr_backend: str = "ollama",
+    ocr_model: str | None = None,
+    ocr_prompt_mode: str = "text",
+    use_gpu: bool = True,
+    paddle_service_url: str | None = None,
 ):
     try:
         workspace = create_document_workspace(file_path)
         page_image_paths = render_document_pages(file_path, workspace, converter=convert_from_path)
-    except Exception as e:
-        return {"error": f"PDF Conversion failed. Is Poppler installed? Error: {str(e)}"}
+    except Exception as exc:
+        _logger.warning("pdf_conversion_failed", reason=str(exc))
+        return {"error": f"PDF Conversion failed. Is Poppler installed? Error: {exc}"}
 
     if not page_image_paths:
         return {"error": "Could not process file format."}
 
     normalized_ocr_backend = (ocr_backend or "ollama").strip().lower()
     try:
-        print(f"👀 OCR Scanning with {ocr_backend} ({ocr_model or 'default'})...")
         ocr_result = run_ocr(
             document_path=file_path,
             page_image_paths=page_image_paths,
@@ -133,25 +148,50 @@ def run_document_ocr(
         )
         ocr_result = materialize_annotations(file_path, ocr_result, page_image_paths)
         return ocr_result.model_dump()
-    except OCRBackendError as e:
+    except OCRBackendError as exc:
         if normalized_ocr_backend in {"ollama", "glm", "glm-ocr", "ollama-glm"}:
-            return {"error": f"Ollama OCR failed: {str(e)}"}
-        return {"error": f"OCR failed: {str(e)}"}
-    except Exception as e:
+            return {"error": f"Ollama OCR failed: {exc}"}
+        return {"error": f"OCR failed: {exc}"}
+    except Exception as exc:
+        _logger.warning("ocr_failed", reason=str(exc), backend=normalized_ocr_backend)
         if normalized_ocr_backend in {"ollama", "glm", "glm-ocr", "ollama-glm"}:
-            return {"error": f"Ollama OCR failed: {str(e)}"}
-        return {"error": f"OCR failed: {str(e)}"}
+            return {"error": f"Ollama OCR failed: {exc}"}
+        return {"error": f"OCR failed: {exc}"}
 
 
-def _build_structuring_input(ocr_payload: dict) -> str:
-    sections = []
+def _build_structuring_user_input(
+    ocr_payload: dict[str, Any], *, provider: str | None = None
+) -> tuple[str, str]:
+    """Compose the user turn with prompt-injection-resistant delimiters.
+
+    Returns ``(user_text, nonce)`` — the nonce MUST be passed to the matching
+    :func:`_build_structuring_system_prompt` so the model can verify delimiters.
+    """
+    nonce = generate_boundary_nonce()
+    sections: list[str] = []
+
     raw_text = ocr_payload.get("raw_text") or ""
     markdown = ocr_payload.get("markdown") or ""
     structured_doc = ocr_payload.get("structured_doc")
-    if raw_text:
-        sections.append(f"OCR_TEXT:\n{raw_text}")
-    if markdown and markdown != raw_text:
-        sections.append(f"OCR_MARKDOWN:\n{markdown}")
+
+    # Prefer markdown over raw_text so we only send one representation when
+    # they duplicate each other.
+    primary = markdown or raw_text
+    if primary:
+        # Defense-in-depth: strip injection phrases embedded in OCR text even
+        # though the untrusted boundary nonce already provides primary
+        # isolation. Same scrub we apply to retrieved RAG chunks.
+        primary = sanitize_retrieved_text(primary)
+        primary = scrub_text(primary, provider=provider)
+        wrapped, _ = wrap_untrusted(primary, nonce)
+        sections.append(f"OCR_CONTENT:\n{wrapped}")
+
+    # Only include structured_doc (PaddleOCR layout JSON) when present and
+    # distinct, because it can balloon the prompt and confuse the model.
     if structured_doc:
-        sections.append(f"OCR_STRUCTURED_DOC:\n{json.dumps(structured_doc, ensure_ascii=False)}")
-    return "\n\n".join(section for section in sections if section)
+        payload_text = json.dumps(structured_doc, ensure_ascii=False)
+        if len(payload_text) <= 30_000:
+            wrapped_struct, _ = wrap_untrusted(payload_text, nonce)
+            sections.append(f"OCR_STRUCTURED_DOC:\n{wrapped_struct}")
+
+    return "\n\n".join(sections), nonce

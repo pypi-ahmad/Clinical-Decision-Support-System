@@ -1,3 +1,11 @@
+"""First-generation agentic extraction workflow.
+
+This graph is the coarser legacy sibling of
+``backend.workflows.extraction_graph``. It remains available for regression
+purposes but the granular graph should be preferred. The compiled graph is
+cached in module scope.
+"""
+
 from __future__ import annotations
 
 import json
@@ -5,16 +13,22 @@ from typing import Any, TypedDict
 
 from backend.database import get_patient_history
 from backend.extract import process_document_pipeline
+from backend.logging_config import get_logger
 from backend.logic import analyze_medical_logic
 from backend.models import MedicalRecord
 from backend.retrieval import build_chunks_from_ocr_payload, create_vector_store, hash_identifier
+from backend.retrieval.chunking import sanitize_retrieved_text
 
 try:
     from langgraph.graph import END, START, StateGraph
-except Exception:
+except Exception:  # pragma: no cover - optional during dev
     END = None
     START = None
     StateGraph = None
+
+
+_logger = get_logger(__name__)
+_compiled_graph = None
 
 
 class ExtractionState(TypedDict, total=False):
@@ -65,6 +79,13 @@ def build_agentic_extraction_graph():
     return graph.compile()
 
 
+def _get_compiled_graph():
+    global _compiled_graph
+    if _compiled_graph is None:
+        _compiled_graph = build_agentic_extraction_graph()
+    return _compiled_graph
+
+
 def run_agentic_extraction_workflow(
     *,
     file_path: str,
@@ -80,8 +101,7 @@ def run_agentic_extraction_workflow(
     use_gpu: bool,
     paddle_service_url: str | None,
 ) -> ExtractionState:
-    graph = build_agentic_extraction_graph()
-    return graph.invoke(
+    return _get_compiled_graph().invoke(
         {
             "file_path": file_path,
             "structuring_provider": structuring_provider,
@@ -132,10 +152,7 @@ def _validate_structured_data_node(state: ExtractionState) -> ExtractionState:
         MedicalRecord.model_validate(structured_data)
     except Exception as exc:
         errors.append(str(exc))
-
-    return {
-        "validation_errors": errors,
-    }
+    return {"validation_errors": errors}
 
 
 def _human_review_gate_node(state: ExtractionState) -> ExtractionState:
@@ -173,9 +190,15 @@ def _retrieve_context_node(state: ExtractionState) -> ExtractionState:
                 "source_type": "medical_record",
             },
         )
-    except Exception:
+    except Exception as exc:
+        _logger.warning("retrieval_failed", reason=str(exc))
         hits = []
-    return {"retrieved_context": hits}
+    sanitized_hits: list[dict[str, Any]] = []
+    for hit in hits:
+        if isinstance(hit, dict) and "text" in hit:
+            hit = {**hit, "text": sanitize_retrieved_text(str(hit["text"]))}
+        sanitized_hits.append(hit)
+    return {"retrieved_context": sanitized_hits}
 
 
 def _analyze_document_node(state: ExtractionState) -> ExtractionState:
@@ -216,5 +239,6 @@ def _index_document_node(state: ExtractionState) -> ExtractionState:
             )
         status = store.upsert_chunks(chunks)
     except Exception as exc:
-        status = {"indexed": False, "reason": str(exc)}
+        _logger.warning("indexing_failed", reason=str(exc))
+        status = {"indexed": False, "reason": "Indexing failed"}
     return {"vector_index_status": status}

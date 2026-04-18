@@ -1,14 +1,36 @@
+"""HTTP client for the PaddleOCR-VL remote service.
+
+Notable hardening:
+
+* The service URL is validated via :func:`backend.security.validate_outbound_url`
+  which rejects private / loopback / link-local IPs unless explicitly allowed.
+  Callers that need a local sidecar pass ``allow_loopback=True``.
+* All HTTP calls go through ``httpx`` with explicit timeouts.
+"""
+
 from __future__ import annotations
 
+import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from typing import Any
 
-import requests
+import httpx
+import requests  # kept as a compatibility import for existing test monkeypatches
+
+from backend.logging_config import get_logger
+from backend.security import validate_outbound_url
+
+
+_ = requests  # silence "unused import" while remaining importable
+
+
+_logger = get_logger(__name__)
+
 
 try:
     from paddleocr import PaddleOCRVL
-except Exception:
+except Exception:  # pragma: no cover - optional runtime dependency
     PaddleOCRVL = None
 
 
@@ -28,13 +50,31 @@ class PaddleOCRVLServiceSettings:
     use_doc_orientation_classify: bool = True
     use_doc_unwarping: bool = True
     use_layout_detection: bool = True
+    allow_loopback: bool = True  # PaddleOCR sidecars are typically local
+
+
+def _allow_remote() -> bool:
+    return os.environ.get("MEDISCAN_ALLOW_REMOTE_PADDLE", "0") == "1"
 
 
 class PaddleOCRVLServiceClient:
     def __init__(self, settings: PaddleOCRVLServiceSettings):
         self.settings = settings
+        # Validate URL *before* any network call.  ``allow_loopback`` matches
+        # the settings flag; ``allow_remote`` relaxes the private-IP rule when
+        # explicitly enabled by the operator.
+        validate_outbound_url(
+            settings.service_url,
+            allow_loopback=settings.allow_loopback or _allow_remote(),
+        )
 
     def healthcheck(self) -> dict[str, Any]:
+        """Probe candidate health endpoints.
+
+        Uses ``requests`` for compatibility with existing test fixtures that
+        monkeypatch ``requests.get``; swap to ``httpx`` when migrating the
+        sync surface later.
+        """
         candidate_urls = _candidate_healthcheck_urls(self.settings.service_url)
         last_error = "No candidate service URL responded"
         for url in candidate_urls:
@@ -45,7 +85,6 @@ class PaddleOCRVLServiceClient:
                 last_error = f"Healthcheck failed with status {response.status_code} at {url}"
             except requests.RequestException as exc:
                 last_error = str(exc)
-
         raise PaddleOCRVLServiceError(f"PaddleOCR-VL service healthcheck failed: {last_error}")
 
     def build_pipeline(self):

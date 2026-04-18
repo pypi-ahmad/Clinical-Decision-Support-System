@@ -1,51 +1,44 @@
-"""
-Extraction Graph (Granular LangGraph Workflow)
-----------------------------------------------
-A deterministic, reviewable LangGraph workflow with explicit node-per-step
-orchestration. Each node has a single responsibility and a typed handoff to
-the next node, making each stage independently inspectable, retryable, and
-testable.
+"""Granular extraction LangGraph.
 
-Graph shape
------------
-ingest_document
-    → classify_document_type
-        → split_pages
-            → ocr_per_page
-                → extract_candidate_fields
-                    → validate_against_schema
-                        → normalize_codes
-                            → retrieve_context
-                                → merge_document_record
-                                    → confidence_gate
-                                        ↙           ↘
-                               human_review      persist_record
-                                    ↓
-                               persist_record
-                                    ↓
-                                  END
+The compiled graph is cached at module scope and reused across requests — the
+previous implementation rebuilt the ``StateGraph`` on every call. Other
+improvements:
+
+* The confidence gate now also consumes OCR-reported per-page confidence
+  (when available) rather than relying solely on heuristic deductions.
+* ``_deep_copy_dict`` is replaced with :func:`copy.deepcopy` to avoid the
+  shallow-list bug that could leak mutations back into shared state.
+* ``_retrieve_context_node`` sanitises retrieved chunk text to defuse stored
+  prompt-injection attacks before the reasoning LLM sees them.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
-from backend.ai_wrapper import clean_json_output, get_ai_response
-from backend.database import get_patient_history, save_record
+from backend.ai_wrapper import AIProviderError, clean_json_output, get_ai_response, parse_model_json
+from backend.database import get_patient_history
 from backend.extract import run_document_ocr
+from backend.logging_config import get_logger
 from backend.logic import analyze_medical_logic
 from backend.models import MedicalRecord
 from backend.retrieval import build_chunks_from_ocr_payload, create_vector_store, hash_identifier
+from backend.retrieval.chunking import sanitize_retrieved_text
+from backend.security import firewall_clause, generate_boundary_nonce, wrap_untrusted
 
 try:
     from langgraph.graph import END, START, StateGraph
-except Exception:
+except Exception:  # pragma: no cover - optional during dev
     END = None
     START = None
     StateGraph = None
+
+
+_logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +47,6 @@ except Exception:
 
 
 class ExtractionGraphState(TypedDict, total=False):
-    # Input
     file_path: str
     structuring_provider: str
     structuring_model: str
@@ -68,7 +60,6 @@ class ExtractionGraphState(TypedDict, total=False):
     use_gpu: bool
     paddle_service_url: str | None
 
-    # Intermediate processing state
     document_type: str | None
     page_count: int
     page_image_paths: list[str]
@@ -77,16 +68,13 @@ class ExtractionGraphState(TypedDict, total=False):
     validation_errors: list[str]
     normalized_fields: dict[str, Any]
 
-    # Context
     past_data: dict[str, Any] | None
     retrieved_context: list[dict[str, Any]]
 
-    # Merged/final
     structured_data: dict[str, Any]
     confidence_score: float
     requires_human_review: bool
 
-    # Outputs
     analysis: dict[str, Any]
     vector_index_status: dict[str, Any] | None
     persisted: bool
@@ -94,8 +82,11 @@ class ExtractionGraphState(TypedDict, total=False):
 
 
 # ---------------------------------------------------------------------------
-# Graph builder
+# Graph builder (compiled lazily at import time)
 # ---------------------------------------------------------------------------
+
+
+_compiled_graph = None
 
 
 def build_extraction_graph():
@@ -129,7 +120,6 @@ def build_extraction_graph():
     graph.add_edge("retrieve_context", "merge_document_record")
     graph.add_edge("merge_document_record", "confidence_gate")
 
-    # Conditional routing: human_review → persist if needed, confidence_gate → direct persist otherwise
     graph.add_conditional_edges(
         "confidence_gate",
         _route_after_confidence_gate,
@@ -142,6 +132,13 @@ def build_extraction_graph():
     graph.add_edge("persist_record", END)
 
     return graph.compile()
+
+
+def _get_compiled_graph():
+    global _compiled_graph
+    if _compiled_graph is None:
+        _compiled_graph = build_extraction_graph()
+    return _compiled_graph
 
 
 def run_extraction_graph(
@@ -159,8 +156,7 @@ def run_extraction_graph(
     use_gpu: bool,
     paddle_service_url: str | None,
 ) -> ExtractionGraphState:
-    graph = build_extraction_graph()
-    return graph.invoke(
+    return _get_compiled_graph().invoke(
         {
             "file_path": file_path,
             "structuring_provider": structuring_provider,
@@ -195,7 +191,6 @@ def _route_after_confidence_gate(state: ExtractionGraphState) -> Literal["human_
 
 
 def _ingest_document_node(state: ExtractionGraphState) -> ExtractionGraphState:
-    """Verify the file exists and is readable. Record basic file metadata."""
     file_path = state.get("file_path", "")
     path = Path(file_path)
     if not path.exists():
@@ -206,15 +201,11 @@ def _ingest_document_node(state: ExtractionGraphState) -> ExtractionGraphState:
 
 
 def _classify_document_type_node(state: ExtractionGraphState) -> ExtractionGraphState:
-    """Heuristically classify the document type (medical_record, insurance_policy, lab_report, etc.) based on filename and extension."""
     if state.get("error"):
         return {"document_type": None}
 
-    file_path = state.get("file_path", "")
-    path = Path(file_path)
-
+    path = Path(state.get("file_path", ""))
     filename_lower = path.stem.lower()
-    suffix_lower = path.suffix.lower()
 
     known_types = {
         "insurance": "insurance_policy",
@@ -238,18 +229,10 @@ def _classify_document_type_node(state: ExtractionGraphState) -> ExtractionGraph
         if keyword in filename_lower:
             document_type = classified_type
             break
-
     return {"document_type": document_type}
 
 
 def _split_pages_node(state: ExtractionGraphState) -> ExtractionGraphState:
-    """Determine the document page count without rendering images.
-
-    Page images are rendered later inside ``_ocr_per_page_node`` via
-    ``run_document_ocr``.  This node provides an early page count so that
-    downstream nodes (and the UI) can display progress information before
-    the heavier OCR pass begins.
-    """
     if state.get("error"):
         return {"page_count": 0, "page_image_paths": []}
 
@@ -263,7 +246,7 @@ def _split_pages_node(state: ExtractionGraphState) -> ExtractionGraphState:
             info = pdfinfo_from_path(file_path)
             page_count = info.get("Pages", 0)
         except Exception:
-            pass  # Will be determined during OCR
+            pass
     elif suffix in (".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".gif", ".webp"):
         page_count = 1
 
@@ -271,7 +254,6 @@ def _split_pages_node(state: ExtractionGraphState) -> ExtractionGraphState:
 
 
 def _ocr_per_page_node(state: ExtractionGraphState) -> ExtractionGraphState:
-    """Run OCR over the full document (all pages) using the selected OCR backend."""
     if state.get("error"):
         return {"ocr": {}}
 
@@ -296,9 +278,7 @@ def _ocr_per_page_node(state: ExtractionGraphState) -> ExtractionGraphState:
     }
 
 
-_STRUCTURING_PROMPT = """
-You are a medical data entry specialist. Convert the text below into valid JSON matching this schema:
-{
+_SCHEMA_DOC = """{
   "patient": {"full_name": "string", "dob": "YYYY-MM-DD", "mrn": "string"},
   "encounter": {"date": "YYYY-MM-DD", "provider": "string", "facility": "string"},
   "clinical": {
@@ -306,13 +286,10 @@ You are a medical data entry specialist. Convert the text below into valid JSON 
     "medications": [{"name": "string", "dosage": "string", "frequency": "string"}],
     "vitals": {"bp": "string", "hr": "string", "temp": "string", "weight": "string"}
   }
-}
-Return ONLY JSON.
-"""
+}"""
 
 
 def _extract_candidate_fields_node(state: ExtractionGraphState) -> ExtractionGraphState:
-    """Run the structuring LLM to extract candidate structured fields from OCR output."""
     if state.get("error"):
         return {"candidate_fields": {}}
 
@@ -325,25 +302,36 @@ def _extract_candidate_fields_node(state: ExtractionGraphState) -> ExtractionGra
     model = state.get("structuring_model", "glm-4.7-flash")
     api_key = state.get("structuring_api_key")
 
-    input_parts = [f"OCR_TEXT:\n{raw_text}"]
-    markdown = ocr_payload.get("markdown", "")
-    if markdown and markdown != raw_text:
-        input_parts.append(f"OCR_MARKDOWN:\n{markdown}")
+    nonce = generate_boundary_nonce()
+    primary, _ = wrap_untrusted(ocr_payload.get("markdown") or raw_text, nonce)
+    sections = [f"OCR_CONTENT:\n{primary}"]
     structured_doc = ocr_payload.get("structured_doc")
     if structured_doc:
-        input_parts.append(f"OCR_STRUCTURED_DOC:\n{json.dumps(structured_doc, ensure_ascii=False)}")
-    user_text = "\n\n".join(input_parts)
+        struct_json = json.dumps(structured_doc, ensure_ascii=False)
+        if len(struct_json) <= 30_000:
+            wrapped_struct, _ = wrap_untrusted(struct_json, nonce)
+            sections.append(f"OCR_STRUCTURED_DOC:\n{wrapped_struct}")
+    user_text = "\n\n".join(sections)
+
+    system_prompt = (
+        "You are a medical data entry specialist. Convert the delimited OCR "
+        "content into JSON matching this schema exactly:\n"
+        f"{_SCHEMA_DOC}\n\nReturn ONLY the JSON object.\n" + firewall_clause(nonce)
+    )
 
     try:
-        response = get_ai_response(provider, model, api_key, _STRUCTURING_PROMPT, user_text)
-        candidate_fields = json.loads(clean_json_output(response))
+        response = get_ai_response(provider, model, api_key, system_prompt, user_text, force_json=True)
+        # ``clean_json_output`` remains the module-level back-compat shim so
+        # older tests/monkeypatches that replace it still take effect.
+        candidate_fields = parse_model_json(clean_json_output(response))
         return {"candidate_fields": candidate_fields}
-    except Exception as exc:
-        return {"error": f"Structuring failed: {exc}", "candidate_fields": {}}
+    except AIProviderError as exc:
+        return {"error": f"Structuring failed: {exc.detail}", "candidate_fields": {}}
+    except (ValueError, json.JSONDecodeError) as exc:
+        return {"error": f"Structuring failed to parse JSON: {exc}", "candidate_fields": {}}
 
 
 def _validate_against_schema_node(state: ExtractionGraphState) -> ExtractionGraphState:
-    """Validate candidate fields against the MedicalRecord Pydantic schema."""
     errors: list[str] = []
     candidate_fields = state.get("candidate_fields") or {}
     if not candidate_fields:
@@ -357,21 +345,11 @@ def _validate_against_schema_node(state: ExtractionGraphState) -> ExtractionGrap
 
 
 def _normalize_codes_node(state: ExtractionGraphState) -> ExtractionGraphState:
-    """
-    Normalize medical codes in the candidate fields.
-
-    Currently applies light-touch normalization:
-    - ICD-10 codes: uppercase, strip extraneous whitespace
-    - Medication names: title-case where all caps
-    - Diagnosis strings: strip trailing punctuation
-
-    Does not fabricate codes where none are present.
-    """
     candidate_fields = state.get("candidate_fields") or {}
     if not candidate_fields:
         return {"normalized_fields": candidate_fields}
 
-    normalized = _deep_copy_dict(candidate_fields)
+    normalized = copy.deepcopy(candidate_fields)
     clinical = normalized.get("clinical") or {}
     diagnosis_list = clinical.get("diagnosis_list") or []
     normalized_diagnoses = []
@@ -401,7 +379,6 @@ def _normalize_codes_node(state: ExtractionGraphState) -> ExtractionGraphState:
 
 
 def _retrieve_context_node(state: ExtractionGraphState) -> ExtractionGraphState:
-    """Retrieve patient history from SQLite and semantic context from the vector store."""
     normalized_fields = state.get("normalized_fields") or state.get("candidate_fields") or {}
     mrn = normalized_fields.get("patient", {}).get("mrn")
     past_data = get_patient_history(mrn) if mrn else None
@@ -411,6 +388,10 @@ def _retrieve_context_node(state: ExtractionGraphState) -> ExtractionGraphState:
         return {"past_data": past_data, "retrieved_context": []}
 
     patient_hash = hash_identifier(mrn)
+    if not patient_hash:
+        # No MRN_HMAC_PEPPER configured → retrieval disabled (intentional).
+        return {"past_data": past_data, "retrieved_context": []}
+
     diagnoses = normalized_fields.get("clinical", {}).get("diagnosis_list", [])
     meds = normalized_fields.get("clinical", {}).get("medications", [])
     med_names = [m.get("name") for m in meds if isinstance(m, dict) and m.get("name")]
@@ -429,23 +410,20 @@ def _retrieve_context_node(state: ExtractionGraphState) -> ExtractionGraphState:
                 "source_type": source_type,
             },
         )
-    except Exception:
+    except Exception as exc:
+        _logger.warning("retrieval_failed", reason=str(exc))
         hits = []
 
-    return {"past_data": past_data, "retrieved_context": hits}
+    sanitized_hits: list[dict[str, Any]] = []
+    for hit in hits:
+        if isinstance(hit, dict) and "text" in hit:
+            hit = {**hit, "text": sanitize_retrieved_text(str(hit["text"]))}
+        sanitized_hits.append(hit)
+    return {"past_data": past_data, "retrieved_context": sanitized_hits}
 
 
 def _merge_document_record_node(state: ExtractionGraphState) -> ExtractionGraphState:
-    """
-    Merge normalized candidate fields with retrieved context.
-
-    Currently preserves normalized_fields as the merged record and stores the
-    full reasoning analysis result in `structured_data`.  The reasoning step
-    includes past_data and retrieved_context so the final summary reflects the
-    combined picture.
-    """
     normalized_fields = state.get("normalized_fields") or state.get("candidate_fields") or {}
-
     analysis = analyze_medical_logic(
         normalized_fields,
         state.get("past_data"),
@@ -454,25 +432,10 @@ def _merge_document_record_node(state: ExtractionGraphState) -> ExtractionGraphS
         state.get("reasoning_api_key"),
         retrieved_context=state.get("retrieved_context"),
     )
-
-    return {
-        "structured_data": normalized_fields,
-        "analysis": analysis,
-    }
+    return {"structured_data": normalized_fields, "analysis": analysis}
 
 
 def _confidence_gate_node(state: ExtractionGraphState) -> ExtractionGraphState:
-    """
-    Assign a confidence score and decide whether human review is needed.
-
-    Confidence is heuristic:
-    - Starts at 1.0
-    - Deducted 0.3 per validation error
-    - Deducted 0.2 when OCR produced no text
-    - Deducted 0.1 per missing top-level structured section
-
-    Human review is triggered when confidence < 0.6 or validation errors exist.
-    """
     errors = state.get("validation_errors") or []
     ocr_payload = state.get("ocr") or {}
     structured_data = state.get("structured_data") or {}
@@ -481,6 +444,13 @@ def _confidence_gate_node(state: ExtractionGraphState) -> ExtractionGraphState:
     score -= min(len(errors) * 0.3, 0.6)
     if not (ocr_payload.get("raw_text") or ocr_payload.get("markdown")):
         score -= 0.2
+
+    # Factor in OCR-reported confidence when present (e.g. PaddleOCR-VL).
+    ocr_confidence = ocr_payload.get("confidence")
+    if isinstance(ocr_confidence, (int, float)):
+        # Low OCR confidence (<0.6) subtracts up to 0.25; high leaves unchanged.
+        score -= max(0.0, (0.6 - float(ocr_confidence)) / 0.6 * 0.25)
+
     for section in ("patient", "encounter", "clinical"):
         if not structured_data.get(section):
             score -= 0.1
@@ -488,31 +458,59 @@ def _confidence_gate_node(state: ExtractionGraphState) -> ExtractionGraphState:
     score = max(0.0, round(score, 2))
     requires_human_review = score < 0.6 or bool(errors)
 
-    return {
-        "confidence_score": score,
-        "requires_human_review": requires_human_review,
-    }
+    return {"confidence_score": score, "requires_human_review": requires_human_review}
 
 
 def _human_review_node(state: ExtractionGraphState) -> ExtractionGraphState:
-    """Human review checkpoint (passthrough).
+    """Emit an audit event for the pending review.
 
-    The ``requires_human_review`` flag is already set by ``confidence_gate``.
-    In an automated pipeline this node performs no additional work.  A
-    production deployment should replace this body with logic that emits
-    a task/ticket, pauses the graph, and resumes on human approval.
+    A production deployment should use LangGraph's ``interrupt()`` + a
+    durable checkpointer (PostgresSaver) to pause the graph here and resume
+    only after a human approves. For now we log the event so it is at least
+    visible in observability.
     """
-    # TODO: integrate with an external review queue in production.
+    try:
+        from backend.database import enqueue_review_task, record_audit_event
+
+        structured = state.get("structured_data") or {}
+        mrn = (structured.get("patient") or {}).get("mrn")
+        mrn_hash = hash_identifier(mrn)
+        errors = state.get("validation_errors") or []
+        doc_type = state.get("document_type")
+        confidence = state.get("confidence_score")
+        task_id: int | None = None
+        try:
+            task_id = enqueue_review_task(
+                mrn_hash=mrn_hash,
+                correlation_id=state.get("correlation_id"),
+                confidence_score=confidence,
+                validation_errors=errors,
+                document_type=doc_type,
+                structured_data=structured,
+            )
+        except Exception:  # pragma: no cover - enqueue is best-effort
+            pass
+        record_audit_event(
+            "human_review_required",
+            mrn_hash=mrn_hash,
+            payload={
+                "confidence_score": confidence,
+                "validation_errors": errors,
+                "document_type": doc_type,
+                "review_task_id": task_id,
+            },
+        )
+    except Exception:  # pragma: no cover - audit must never fail the graph
+        pass
     return {}
 
 
-def _persist_record_node(state: ExtractionGraphState) -> ExtractionGraphState:
-    """Index the document into the vector store and record persistence.
+def _deep_copy_dict(d: dict[str, Any]) -> dict[str, Any]:
+    """Back-compat shim used by older tests. Equivalent to :func:`copy.deepcopy`."""
+    return copy.deepcopy(d)
 
-    When ``requires_human_review`` is set, indexing is skipped so that
-    unreviewed records do not pollute the retrieval index.  The record
-    can be indexed later once a human approves.
-    """
+
+def _persist_record_node(state: ExtractionGraphState) -> ExtractionGraphState:
     if state.get("requires_human_review"):
         return {
             "vector_index_status": {"indexed": False, "reason": "Pending human review"},
@@ -527,8 +525,9 @@ def _persist_record_node(state: ExtractionGraphState) -> ExtractionGraphState:
     store = create_vector_store()
     vector_index_status: dict[str, Any] | None = None
     if store is not None:
+        patient_hash = hash_identifier(structured_data.get("patient", {}).get("mrn"))
         metadata = {
-            "patient_id_hash": hash_identifier(structured_data.get("patient", {}).get("mrn")),
+            "patient_id_hash": patient_hash,
             "encounter_date": structured_data.get("encounter", {}).get("date"),
             "source_type": source_type,
             "ocr_backend": ocr_payload.get("backend"),
@@ -537,6 +536,7 @@ def _persist_record_node(state: ExtractionGraphState) -> ExtractionGraphState:
             chunks = build_chunks_from_ocr_payload(file_path, ocr_payload, metadata)
             if not chunks:
                 from backend.retrieval import build_chunks_from_text
+
                 chunks = build_chunks_from_text(
                     file_path,
                     json.dumps(structured_data),
@@ -545,26 +545,9 @@ def _persist_record_node(state: ExtractionGraphState) -> ExtractionGraphState:
                 )
             vector_index_status = store.upsert_chunks(chunks)
         except Exception as exc:
-            vector_index_status = {"indexed": False, "reason": str(exc)}
+            _logger.warning("indexing_failed", reason=str(exc))
+            vector_index_status = {"indexed": False, "reason": "Indexing failed"}
     else:
         vector_index_status = {"indexed": False, "reason": "No vector store is configured"}
 
     return {"vector_index_status": vector_index_status, "persisted": True}
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _deep_copy_dict(d: dict[str, Any]) -> dict[str, Any]:
-    """Shallow-copy nested dicts to avoid mutating state."""
-    result: dict[str, Any] = {}
-    for key, value in d.items():
-        if isinstance(value, dict):
-            result[key] = _deep_copy_dict(value)
-        elif isinstance(value, list):
-            result[key] = list(value)
-        else:
-            result[key] = value
-    return result

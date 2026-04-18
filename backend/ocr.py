@@ -1,3 +1,5 @@
+"""OCR dispatch layer."""
+
 from __future__ import annotations
 
 from backend.artifacts import annotate_document, build_artifact_manifest, create_document_workspace
@@ -47,6 +49,10 @@ def run_ocr(
 def materialize_annotations(document_path: str, ocr_result, page_image_paths: list[str]):
     workspace = create_document_workspace(document_path)
     workspace.page_image_paths = list(page_image_paths)
-    workspace = annotate_document(page_image_paths, [box.model_dump() for box in ocr_result.bounding_boxes], workspace)
+    workspace = annotate_document(
+        page_image_paths,
+        [box.model_dump() for box in ocr_result.bounding_boxes],
+        workspace,
+    )
     ocr_result.artifact_manifest = build_artifact_manifest(document_path, workspace)
     return ocr_result

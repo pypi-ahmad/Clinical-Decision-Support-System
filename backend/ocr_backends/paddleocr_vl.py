@@ -1,8 +1,16 @@
+"""PaddleOCR-VL backend with a process-wide pipeline cache.
+
+The PaddleOCRVL pipeline loads several hundred megabytes of weights and GPU
+memory on first use. Rebuilding it per request would make latency prohibitive,
+so we cache the pipeline per (device, config) key.
+"""
+
 from __future__ import annotations
 
 import json
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -13,12 +21,31 @@ from backend.ocr_backends.base import (
     aggregate_page_results,
     collect_bounding_boxes,
 )
-from backend.ocr_backends.service_client import PaddleOCRVLServiceClient, PaddleOCRVLServiceError, PaddleOCRVLServiceSettings
+from backend.ocr_backends.service_client import (
+    PaddleOCRVLServiceClient,
+    PaddleOCRVLServiceError,
+    PaddleOCRVLServiceSettings,
+)
+
 
 try:
     from paddleocr import PaddleOCRVL
-except Exception:
+except Exception:  # pragma: no cover - optional runtime dependency
     PaddleOCRVL = None
+
+
+@lru_cache(maxsize=2)
+def _cached_local_pipeline(device: str, use_doc_orientation: bool, use_doc_unwarp: bool, use_layout: bool):
+    if PaddleOCRVL is None:
+        raise PaddleOCRVLServiceError(
+            "PaddleOCR-VL is not installed. Install paddleocr[doc-parser] and a compatible PaddlePaddle runtime."
+        )
+    return PaddleOCRVL(
+        device=device,
+        use_doc_orientation_classify=use_doc_orientation,
+        use_doc_unwarping=use_doc_unwarp,
+        use_layout_detection=use_layout,
+    )
 
 
 class PaddleOCRVLBackend(BaseOCRBackend):
@@ -58,14 +85,9 @@ class PaddleOCRVLBackend(BaseOCRBackend):
 
 
 def _build_local_pipeline(config: OCRBackendConfig):
-    """Construct a local PaddleOCRVL instance. Separated for test injection."""
-    pipeline_kwargs: dict[str, Any] = {
-        "device": "gpu" if config.use_gpu else "cpu",
-        "use_doc_orientation_classify": True,
-        "use_doc_unwarping": True,
-        "use_layout_detection": True,
-    }
-    return PaddleOCRVL(**pipeline_kwargs)
+    """Return a cached local PaddleOCRVL instance (build-once-per-process)."""
+    device = "gpu" if config.use_gpu else "cpu"
+    return _cached_local_pipeline(device, True, True, True)
 
 
 def _run_paddle_pipeline(document_path: str, config: OCRBackendConfig):
