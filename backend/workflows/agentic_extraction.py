@@ -125,7 +125,7 @@ def _extract_document_node(state: ExtractionState) -> ExtractionState:
         state.get("structuring_provider", "Ollama"),
         state.get("structuring_model", "glm-4.7-flash"),
         state.get("structuring_api_key"),
-        ocr_backend=state.get("ocr_backend", "ollama"),
+        ocr_backend=state.get("ocr_backend", "glm"),
         ocr_model=state.get("ocr_model"),
         ocr_prompt_mode=state.get("ocr_prompt_mode", "text"),
         use_gpu=state.get("use_gpu", True),

@@ -259,7 +259,7 @@ def _ocr_per_page_node(state: ExtractionGraphState) -> ExtractionGraphState:
 
     ocr_payload = run_document_ocr(
         state["file_path"],
-        ocr_backend=state.get("ocr_backend", "ollama"),
+        ocr_backend=state.get("ocr_backend", "glm"),
         ocr_model=state.get("ocr_model"),
         ocr_prompt_mode=state.get("ocr_prompt_mode", "text"),
         use_gpu=state.get("use_gpu", True),

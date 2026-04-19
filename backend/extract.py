@@ -49,7 +49,7 @@ def process_document_pipeline(
     model: str = "glm-4.7-flash",
     api_key: str | None = None,
     *,
-    ocr_backend: str = "ollama",
+    ocr_backend: str = "glm",
     ocr_model: str | None = None,
     ocr_prompt_mode: str = "text",
     use_gpu: bool = True,
@@ -117,7 +117,7 @@ def process_document_pipeline(
 
 def run_document_ocr(
     file_path: str,
-    ocr_backend: str = "ollama",
+    ocr_backend: str = "glm",
     ocr_model: str | None = None,
     ocr_prompt_mode: str = "text",
     use_gpu: bool = True,
