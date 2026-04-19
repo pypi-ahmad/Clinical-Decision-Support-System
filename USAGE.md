@@ -9,7 +9,7 @@ MediScan OCR is a clinical decision-support system that automates medical docume
 | Capability | Description |
 |---|---|
 | **Document Ingestion** | Multi-page PDF and image upload with automatic page rendering and artifact management. |
-| **Pluggable OCR** | Interchangeable OCR backends (GLM-4V, DeepSeek, PaddleOCR-VL) with configurable prompt modes. |
+| **Pluggable OCR** | Interchangeable OCR backends — GLM-OCR (default), DeepSeek-OCR, and PaddleOCR-VL — with configurable prompt modes. |
 | **Structured Extraction** | LLM-driven extraction of patient demographics, vitals, diagnoses (with ICD codes), medications, and clinical notes into a normalized JSON schema. |
 | **Clinical Reasoning** | Automated trend detection, alert generation, and narrative summarization powered by a separately configurable reasoning model. |
 | **Insurance Verification** | Policy document ingestion (plain text or OCR), semantic comparison against extracted diagnoses, and eligibility determination with explainable reasoning. |
@@ -36,8 +36,8 @@ MediScan OCR is a clinical decision-support system that automates medical docume
 │                      ▼                         ▼                    │
 │  ┌──────────────────────────┐  ┌───────────────────────────┐        │
 │  │  OCR Backends            │  │  Retrieval                │        │
-│  │  Ollama (GLM / DeepSeek) │  │  Qdrant (active)          │        │
-│  │  PaddleOCR-VL            │  │  pgvector (scaffold)      │        │
+│  │  GLM-OCR (default)       │  │  Qdrant (active)          │        │
+│  │  DeepSeek / PaddleOCR-VL │  │  pgvector (scaffold)      │        │
 │  └──────────────────────────┘  └───────────────────────────┘        │
 │                                        │                            │
 │  ┌─────────────────────────────────────┴──────────────────────────┐ │
@@ -135,16 +135,16 @@ All configuration is performed in the Streamlit sidebar before document upload.
 
 Select the engine used for optical character recognition.
 
-| Option | Engine | Bounding Boxes | Notes |
-|---|---|---|---|
-| DeepSeek-OCR (Ollama) | Ollama + DeepSeek prompts | No | Text-focused, fast |
-| GLM-OCR (Ollama) | Ollama + GLM-4V prompts | No | Supports the prompt modes below |
-| PaddleOCR-VL-1.5 (Local Python) | Local PaddleOCR-VL runtime | Yes | Requires `paddleocr[doc-parser]` install |
-| PaddleOCR-VL-1.5 (Local Service) | HTTP service client | Yes | The service URL is **server-configured only** via the `PADDLE_SERVICE_URL` environment variable — clients cannot override it |
+| Option | Engine | Bounding Boxes | Default | Notes |
+|---|---|---|---|---|
+| **GLM-OCR (Ollama)** | Ollama + GLM-OCR prompts | No | **Yes** | Supports text, table, figure, formula, chart prompt modes |
+| DeepSeek-OCR (Ollama) | Ollama + DeepSeek prompts | No | — | Text-focused, fast |
+| PaddleOCR-VL-1.5 (Local Python) | Local PaddleOCR-VL runtime | Yes | — | Requires `paddleocr[doc-parser]` install |
+| PaddleOCR-VL-1.5 (Local Service) | HTTP service client | Yes | — | The service URL is **server-configured only** via the `PADDLE_SERVICE_URL` environment variable — clients cannot override it |
 
 #### OCR Mode
 
-The sidebar exposes the full prompt-mode list supported by the Ollama / GLM backends: `text`, `ocr`, `table`, `formula`, `chart`, `spotting`, `seal`. `text` is the default and is the sensible choice for narrative clinical records. The remaining modes are forwarded verbatim to the vision model as the prompt template selector.
+The sidebar exposes the full prompt-mode list supported by the GLM-OCR backend: `text`, `ocr`, `table`, `formula`, `chart`, `spotting`, `seal`. `text` is the default and the recommended choice for narrative clinical records. The remaining modes are forwarded verbatim to the vision model as the prompt template selector. DeepSeek-OCR supports `text` mode only.
 
 #### Extraction Workflow
 
@@ -253,7 +253,7 @@ Process a medical document through the selected extraction workflow.
 | `reasoning_provider` | string | `null` | Override provider for the reasoning LLM |
 | `reasoning_model` | string | `null` | Override model for the reasoning LLM |
 | `reasoning_api_key` | string | `null` | Same opt-in rule as `api_key` |
-| `ocr_backend` | string | `"ollama"` | OCR engine: `ollama`, `glm`, or `paddle` |
+| `ocr_backend` | string | `"glm"` | OCR engine: `glm` (default), `ollama`, or `paddle` |
 | `ocr_model` | string | `null` | OCR model identifier |
 | `ocr_mode` | string | `"text"` | Prompt mode for Ollama-based OCR |
 | `use_gpu` | boolean | `true` | Enable GPU acceleration for PaddleOCR-VL |
@@ -279,7 +279,7 @@ Compare extracted medical data against an insurance policy document.
 | `reasoning_model` | string | `null` | Override model for reasoning |
 | `reasoning_api_key` | string | `null` | Same opt-in rule as `api_key` |
 | `policy_ocr` | boolean | `false` | Run OCR on the policy document before reasoning (auto-enabled for non-`.txt` uploads) |
-| `ocr_backend` | string | `"ollama"` | OCR backend for policy OCR |
+| `ocr_backend` | string | `"glm"` | OCR backend for policy OCR |
 | `ocr_model` | string | `null` | OCR model for policy OCR |
 | `ocr_mode` | string | `"text"` | OCR mode for policy OCR |
 | `use_gpu` | boolean | `true` | GPU flag for policy OCR |
@@ -391,7 +391,10 @@ Before relying on a feature, confirm the underlying service is reachable. The ta
 ```bash
 # Verify the server is running and your models are available
 ollama list
-# Expected: lists pulled models (e.g., glm-4.7-flash, deepseek-ocr)
+# Expected: lists pulled models (e.g., glm-ocr, glm-4.7-flash, deepseek-ocr)
+
+# Pull GLM-OCR if not already available (default OCR backend)
+ollama pull glm-ocr
 ```
 
 If `ollama list` fails with a connection error, start the server with `ollama serve`.

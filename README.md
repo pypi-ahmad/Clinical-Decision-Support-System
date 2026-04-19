@@ -23,7 +23,7 @@ MediScan OCR transforms unstructured medical documents into validated, machine-r
 
 ### Key Features
 
-- **Multi-engine OCR** — Swap between GLM-4V, DeepSeek, and PaddleOCR-VL backends without changing application code.
+- **Multi-engine OCR** — GLM-OCR (default), DeepSeek-OCR, and PaddleOCR-VL backends, hot-swappable per request without application-code changes.
 - **Graph-based extraction** — A 12-node LangGraph pipeline (ingest → classify → split → OCR → extract → validate → normalize → retrieve → merge → confidence_gate → human_review → persist) with typed state and per-node observability.
 - **Independent model routing** — Configure separate providers and models for structuring and clinical reasoning within a single request.
 - **Semantic retrieval** — Qdrant-backed vector search with exact metadata filters for cross-encounter context and policy clause retrieval.
@@ -60,7 +60,7 @@ python -m uvicorn backend.main:app --reload --port 8000   # Terminal 1
 streamlit run frontend/app.py                              # Terminal 2
 ```
 
-> **Prerequisites:** [Poppler](https://poppler.freedesktop.org/) for PDF rendering, [Ollama](https://ollama.com/) for local LLM inference. See [USAGE.md](USAGE.md) for PaddleOCR-VL and Qdrant setup.
+> **Prerequisites:** [Poppler](https://poppler.freedesktop.org/) for PDF rendering, [Ollama](https://ollama.com/) for local LLM inference. Pull the default OCR model with `ollama pull glm-ocr`. See [USAGE.md](USAGE.md) for PaddleOCR-VL and Qdrant setup.
 
 ## Architecture
 
@@ -80,7 +80,7 @@ flowchart TB
 
     subgraph Processing
         direction TB
-        OCR[OCR Backends<br/>GLM · DeepSeek · PaddleOCR-VL]
+        OCR[OCR Backends<br/>GLM-OCR · DeepSeek · PaddleOCR-VL]
         STRUCT[Structuring LLM]
         REASON[Reasoning LLM]
         ART[Artifact Engine<br/>BBox · Annotated PDF · Overlays]
@@ -122,7 +122,7 @@ flowchart TB
 │   ├── ocr.py                      # Thin OCR dispatch layer
 │   ├── ocr_backends/
 │   │   ├── base.py                 # OCRResult, OCRPageResult, OCRBoundingBox, abstract backend
-│   │   ├── ollama_ocr.py           # GLM-4V and DeepSeek prompt templates, multi-page loop
+│   │   ├── ollama_ocr.py           # GLM-OCR and DeepSeek prompt templates, multi-page loop
 │   │   ├── paddleocr_vl.py         # PaddleOCR-VL local Python + service modes
 │   │   └── service_client.py       # HTTP client with healthcheck and timeout
 │   ├── workflows/
@@ -193,12 +193,12 @@ First-generation LangGraph implementation with coarser composite nodes. Availabl
 
 All backends produce a unified `OCRResult` with per-page text, optional markdown, structured output, and bounding boxes.
 
-| Backend | Engine | Bounding Boxes | Prompt Modes |
-|---|---|---|---|
-| DeepSeek-OCR | Ollama | — | text |
-| GLM-OCR | Ollama | — | text · table · figure · formula · chart |
-| PaddleOCR-VL (local) | PaddlePaddle | Yes | — |
-| PaddleOCR-VL (service) | HTTP client | Yes | — |
+| Backend | Engine | Bounding Boxes | Prompt Modes | Default |
+|---|---|---|---|---|
+| **GLM-OCR** | Ollama | — | text · table · figure · formula · chart | **Yes** |
+| DeepSeek-OCR | Ollama | — | text | — |
+| PaddleOCR-VL (local) | PaddlePaddle | Yes | — | — |
+| PaddleOCR-VL (service) | HTTP client | Yes | — | — |
 
 ## Semantic Retrieval
 
@@ -236,7 +236,7 @@ All data routes require the `X-API-Key` header to match `MEDISCAN_API_KEY`. A re
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `file` | file | *required* | Medical document (PDF, JPG, PNG); magic-byte validated |
-| `ocr_backend` | string | `ollama` | OCR engine: `ollama`, `glm`, `paddle` |
+| `ocr_backend` | string | `glm` | OCR engine: `glm` (default), `ollama`, `paddle` |
 | `ocr_mode` | string | `text` | Prompt mode (GLM only) |
 | `structuring_provider` | string | `null` | Provider for the structuring LLM |
 | `structuring_model` | string | `null` | Model for the structuring LLM |

@@ -74,7 +74,7 @@ streamlit run frontend/app.py
 
 ## 6. Use the app
 
-1. Choose an OCR backend (GLM4-VL, DeepSeek, PaddleOCR-VL local, PaddleOCR-VL service).
+1. Choose an OCR backend (GLM-OCR, DeepSeek-OCR, PaddleOCR-VL local, PaddleOCR-VL service). GLM-OCR is selected by default.
 2. Choose structuring and reasoning models separately.
 3. Select a workflow mode: **Direct pipeline**, **Granular extraction graph** (12-node LangGraph), or **Agentic workflow**.
 4. Upload a medical PDF or image.
