@@ -31,9 +31,17 @@ def _auth_headers() -> dict[str, str]:
     return {"X-API-Key": API_KEY} if API_KEY else {}
 PROVIDER_MODELS = {
     "Ollama": ["glm-4.7-flash", "lfm2.5-thinking", "llama3"],
-    "OpenAI": ["gpt-4o", "gpt-3.5-turbo", "gpt-4-turbo"],
-    "Anthropic": ["claude-3-5-sonnet-20240620", "claude-3-opus-20240229"],
-    "Gemini": ["gemini-1.5-pro", "gemini-1.5-flash"],
+    "OpenAI": ["gpt-5.4", "gpt-5.4-mini"],
+    "Anthropic": [
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+    ],
+    "Gemini": [
+        "gemini-3.1-pro-preview",
+        "gemini-3-flash-preview",
+    ],
 }
 
 st.set_page_config(page_title="MediScan AI", layout="wide", page_icon="🏥")
@@ -136,6 +144,7 @@ with st.sidebar:
             "PaddleOCR-VL-1.5 (Local Python)",
             "PaddleOCR-VL-1.5 (Local Service)",
         ],
+        index=1,
     )
     ocr_prompt_mode = st.selectbox(
         "OCR Mode",
