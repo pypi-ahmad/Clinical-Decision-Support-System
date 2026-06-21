@@ -83,7 +83,7 @@ jobs:
         image: qdrant/qdrant:v1.12.4
         ports: ["6333:6333"]
         options: >-
-          --health-cmd "wget -qO- http://localhost:6333/collections | grep -q ."
+          --health-cmd "wget -qO- http://localhost:6333/healthz | grep -q ok"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -123,7 +123,7 @@ jobs:
         image: qdrant/qdrant:v1.12.4
         ports: ["6333:6333"]
         options: >-
-          --health-cmd "wget -qO- http://localhost:6333/collections | grep -q ."
+          --health-cmd "wget -qO- http://localhost:6333/healthz | grep -q ok"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
