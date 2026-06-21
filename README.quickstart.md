@@ -1,6 +1,12 @@
-# MediScan OCR — Quickstart
+# MediScan OCR &mdash; Quickstart
 
 Short path for running the current implementation locally.
+
+> **Looking for the full reference?** Read [docs/HANDBOOK.md](docs/HANDBOOK.md)
+> for a zero-to-hero walkthrough, or the focused docs:
+> [ARCHITECTURE](docs/ARCHITECTURE.md) &middot;
+> [SECURITY](docs/SECURITY.md) &middot;
+> [DEVELOPMENT](docs/DEVELOPMENT.md).
 
 ## What you get
 
@@ -8,7 +14,7 @@ Short path for running the current implementation locally.
 - Streamlit frontend with OCR backend selection, review, bbox overlays, annotated downloads, and insurance checks
 - Three extraction workflow modes: Direct pipeline, Granular extraction graph, Agentic workflow
 - Separate OCR / Structuring / Reasoning model configuration
-- SQLite persistence
+- SQLite persistence with audit log and review queue
 - Optional Qdrant semantic retrieval wired into analysis and insurance reasoning
 - Annotated PDF/image output with bounding box visualization
 
@@ -79,7 +85,7 @@ streamlit run frontend/app.py
 3. Select a workflow mode: **Direct pipeline**, **Granular extraction graph** (12-node LangGraph), or **Agentic workflow**.
 4. Upload a medical PDF or image.
 5. Review extracted JSON, bounding boxes, annotated output, and overlays across 4 tabs.
-   > **Note:** The Annotated, Overlay, and Bounding Boxes tabs only populate when using a PaddleOCR-VL backend. Ollama-based backends (GLM, DeepSeek) produce text-only output — those tabs will be empty.
+   > **Note:** The Annotated, Overlay, and Bounding Boxes tabs only populate when using a PaddleOCR-VL backend. Ollama-based backends (GLM, DeepSeek) produce text-only output &mdash; those tabs will be empty.
 6. Save the record if it looks correct.
 7. Optionally upload a policy and run insurance checking with semantic retrieval.
 
@@ -95,4 +101,5 @@ python -m pytest
 - pgvector is scaffolded but not live yet.
 - PaddleOCR-VL requires extra local setup (see [USAGE.md](USAGE.md)).
 
-See `README.md` for the full architecture and API details.
+See `README.md` for the full architecture and API details, and
+[docs/HANDBOOK.md](docs/HANDBOOK.md) for a complete walkthrough.

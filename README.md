@@ -8,61 +8,41 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraph/)
-[![Tests](https://img.shields.io/badge/tests-249%20(241%20pass%20·%208%20skip)-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-249%20(241%20pass%20%C2%B7%208%20skip)-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-81%25-brightgreen)]()
 
-[Quick Start](#quick-start) · [Architecture](#architecture) · [Usage Guide](USAGE.md) · [API Reference](#api-reference) · [Contributing](#roadmap)
+[Quick Start](#quick-start) &middot; [Architecture](#architecture) &middot; [Usage Guide](USAGE.md) &middot; [API Reference](#api-reference) &middot; [Handbook](docs/HANDBOOK.md) &middot; [Roadmap](#roadmap)
 
 </div>
 
 ---
 
-## Overview
+## What is MediScan OCR?
 
-MediScan OCR transforms unstructured medical documents into validated, machine-readable clinical records. It combines pluggable OCR engines, LLM-powered structuring, graph-based extraction workflows, and semantic retrieval to produce auditable, correctable output — bridging the gap between paper-based clinical data and downstream decision-support systems.
+MediScan OCR is a **clinical decision-support system** that turns unstructured
+medical documents (PDFs, scanned images, lab reports, insurance policies) into
+**validated, machine-readable clinical records**. It combines pluggable OCR
+engines, LLM-powered structuring, graph-based extraction workflows, and
+semantic retrieval to produce auditable, correctable output that downstream
+CDS pipelines can consume.
 
-### Key Features
+It ships as a single FastAPI service plus a Streamlit operator UI. Every
+component is replaceable; nothing about the OCR engine, the LLM provider, or
+the vector store is hard-coded into the request handlers.
 
-- **Multi-engine OCR** — GLM-OCR (default), DeepSeek-OCR, and PaddleOCR-VL backends, hot-swappable per request without application-code changes.
-- **Graph-based extraction** — A 12-node LangGraph pipeline (ingest → classify → split → OCR → extract → validate → normalize → retrieve → merge → confidence_gate → human_review → persist) with typed state and per-node observability.
-- **Independent model routing** — Configure separate providers and models for structuring and clinical reasoning within a single request.
-- **Semantic retrieval** — Qdrant-backed vector search with exact metadata filters for cross-encounter context and policy clause retrieval.
-- **Artifact generation** — Bounding box overlays, annotated PDFs/images, and protected downloadable artifacts.
-- **Insurance verification** — Policy ingestion (text or OCR), semantic comparison against extracted diagnoses, and explainable eligibility reasoning.
-- **Human-in-the-loop** — Confidence-gated review tasks persisted to SQLite; approve/reject endpoints for an operator queue.
-- **Security hardening** — `X-API-Key` auth on every data route, rate limiting (slowapi), upload magic-byte validation, filename sanitization, SSRF guard on outbound service URLs, HMAC-peppered MRN hashing, and a prompt-injection firewall on retrieved chunks.
-- **Resilient LLM client** — Tenacity retries with exponential jitter and a transient-only retry predicate (auth/validation errors are not retried); per-provider timeouts for OpenAI, Anthropic, Gemini, and Ollama.
-- **Observability** — Structured JSON logging with PHI redaction, per-request correlation IDs (`X-Request-ID`), optional Prometheus `/metrics`, and optional OpenTelemetry FastAPI instrumentation.
+## Why use it?
 
-## Quick Start
+| Pain point | MediScan's answer |
+|---|---|
+| Paper and PDF clinical records are unusable for downstream analytics | OCR + LLM structuring produce a typed `MedicalRecord` (Pydantic v2) that round-trips through SQLite. |
+| LLM outputs are noisy and frequently off-schema | A 12-node LangGraph runs extract → validate → normalize → confidence-gate, and routes low-confidence documents to a human-review queue. |
+| Clinicians need to compare today's record against prior encounters | SQLite + Qdrant retrieval give the reasoning LLM structured history and semantic context by patient MRN. |
+| Insurance eligibility is a separate workflow | `/check_insurance` ingests a policy (TXT or PDF), chunks it, and reasons over extracted diagnoses with explainable verdicts. |
+| PHI must never leak to logs or external services | Structlog redacts sensitive keys + provider tokens; HMAC-peppered MRN hashing replaces raw identifiers; a prompt firewall wraps every untrusted document section in nonce-delimited blocks. |
+| Multiple OCR engines are needed for different document types | GLM-OCR (default, Ollama), DeepSeek-OCR, and PaddleOCR-VL (local Python or HTTP service) are hot-swappable per request. |
+| Reasoning quality should be reproducible | Capture-and-embed lineage (git SHA, library versions, OCR/LLM identifiers) on every record and audit event. |
 
-```bash
-# Clone
-git clone https://github.com/pypi-ahmad/Clinical-Decision-Support-System.git
-cd Clinical-Decision-Support-System
-
-# Environment
-python -m venv .venv && .venv\Scripts\Activate.ps1   # Windows
-# source .venv/bin/activate                           # Linux / macOS
-
-# Dependencies (reproducible build uses the lock file)
-pip install --upgrade pip
-pip install -r requirements.lock.txt                  # or: pip install -r requirements.txt
-
-# Required env vars
-$env:MEDISCAN_API_KEY = "change-me-to-a-long-random-string"   # required by every data route
-$env:MRN_HMAC_PEPPER  = "long-random-server-only-secret"      # required for retrieval / audit linkage
-# Local dev only (skips auth — DO NOT set in production):
-# $env:MEDISCAN_ALLOW_ANONYMOUS = "1"
-
-# Launch
-python -m uvicorn backend.main:app --reload --port 8000   # Terminal 1
-streamlit run frontend/app.py                              # Terminal 2
-```
-
-> **Prerequisites:** [Poppler](https://poppler.freedesktop.org/) for PDF rendering, [Ollama](https://ollama.com/) for local LLM inference. Pull the default OCR model with `ollama pull glm-ocr`. See [USAGE.md](USAGE.md) for PaddleOCR-VL and Qdrant setup.
-
-## Architecture
+## How it works
 
 ```mermaid
 flowchart TB
@@ -80,10 +60,10 @@ flowchart TB
 
     subgraph Processing
         direction TB
-        OCR[OCR Backends<br/>GLM-OCR · DeepSeek · PaddleOCR-VL]
+        OCR[OCR Backends<br/>GLM-OCR &middot; DeepSeek &middot; PaddleOCR-VL]
         STRUCT[Structuring LLM]
         REASON[Reasoning LLM]
-        ART[Artifact Engine<br/>BBox · Annotated PDF · Overlays]
+        ART[Artifact Engine<br/>BBox &middot; Annotated PDF &middot; Overlays]
     end
 
     subgraph Storage
@@ -92,7 +72,7 @@ flowchart TB
         QDRANT[(Qdrant)]
     end
 
-    UI -- "/analyze · /check_insurance · /confirm" --> ROUTER
+    UI -- "/analyze &middot; /check_insurance &middot; /confirm" --> ROUTER
     ROUTER --> DIRECT
     ROUTER --> GRAPH
     ROUTER --> AGENTIC
@@ -107,6 +87,12 @@ flowchart TB
     REASON --> SQLITE
     REASON --> QDRANT
 ```
+
+For the complete zero-to-hero walkthrough (every subsystem, with code references
+and example output shapes), see **[docs/HANDBOOK.md](docs/HANDBOOK.md)**. For
+focused references, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
+[docs/SECURITY.md](docs/SECURITY.md), and
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ### Project Structure
 
@@ -141,6 +127,11 @@ flowchart TB
 │   └── models.py                   # Pydantic domain models (MedicalRecord, etc.)
 ├── frontend/
 │   └── app.py                      # Streamlit application
+├── docs/
+│   ├── HANDBOOK.md                 # Zero-to-hero walkthrough
+│   ├── ARCHITECTURE.md             # System architecture reference
+│   ├── SECURITY.md                 # Defense-in-depth model
+│   └── DEVELOPMENT.md              # Tests, CI, dev workflow
 ├── tests/
 │   ├── unit/                       # Module-level tests across backend/
 │   ├── integration/                # FastAPI TestClient + live-stack (auto-skip)
@@ -152,6 +143,34 @@ flowchart TB
 ├── USAGE.md                        # Comprehensive usage guide
 └── README.quickstart.md            # Minimal startup path
 ```
+
+## Quick Start
+
+```bash
+# Clone
+git clone https://github.com/pypi-ahmad/Clinical-Decision-Support-System.git
+cd Clinical-Decision-Support-System
+
+# Environment
+python -m venv .venv && .venv\Scripts\Activate.ps1   # Windows
+# source .venv/bin/activate                           # Linux / macOS
+
+# Dependencies (reproducible build uses the lock file)
+pip install --upgrade pip
+pip install -r requirements.lock.txt                  # or: pip install -r requirements.txt
+
+# Required env vars
+$env:MEDISCAN_API_KEY = "change-me-to-a-long-random-string"   # required by every data route
+$env:MRN_HMAC_PEPPER  = "long-random-server-only-secret"      # required for retrieval / audit linkage
+# Local dev only (skips auth — DO NOT set in production):
+# $env:MEDISCAN_ALLOW_ANONYMOUS = "1"
+
+# Launch
+python -m uvicorn backend.main:app --reload --port 8000   # Terminal 1
+streamlit run frontend/app.py                              # Terminal 2
+```
+
+> **Prerequisites:** [Poppler](https://poppler.freedesktop.org/) for PDF rendering, [Ollama](https://ollama.com/) for local LLM inference. Pull the default OCR model with `ollama pull glm-ocr`. See [USAGE.md](USAGE.md) for PaddleOCR-VL and Qdrant setup.
 
 ## Extraction Workflows
 
@@ -195,10 +214,10 @@ All backends produce a unified `OCRResult` with per-page text, optional markdown
 
 | Backend | Engine | Bounding Boxes | Prompt Modes | Default |
 |---|---|---|---|---|
-| **GLM-OCR** | Ollama | — | text · table · figure · formula · chart | **Yes** |
-| DeepSeek-OCR | Ollama | — | text | — |
-| PaddleOCR-VL (local) | PaddlePaddle | Yes | — | — |
-| PaddleOCR-VL (service) | HTTP client | Yes | — | — |
+| **GLM-OCR** | Ollama | &mdash; | text &middot; table &middot; figure &middot; formula &middot; chart | **Yes** |
+| DeepSeek-OCR | Ollama | &mdash; | text | &mdash; |
+| PaddleOCR-VL (local) | PaddlePaddle | Yes | &mdash; | &mdash; |
+| PaddleOCR-VL (service) | HTTP client | Yes | &mdash; | &mdash; |
 
 ## Semantic Retrieval
 
@@ -206,7 +225,7 @@ Documents are chunked, embedded (Ollama `nomic-embed-text`), and indexed into Qd
 
 | Field | Purpose |
 |---|---|
-| `patient_id_hash` | SHA-256 of MRN for deterministic, privacy-preserving lookup |
+| `patient_id_hash` | HMAC-SHA256 of MRN for deterministic, privacy-preserving lookup |
 | `source_type` | `medical_record` or `insurance_policy` |
 | `encounter_date` | Temporal filtering |
 | `page_number` | Page-level provenance |
@@ -227,8 +246,8 @@ All data routes require the `X-API-Key` header to match `MEDISCAN_API_KEY`. A re
 | `/review/pending` | GET | `X-API-Key` | List pending human-review tasks |
 | `/review/{task_id}/approve` | POST | `X-API-Key` | Approve a queued review task |
 | `/review/{task_id}/reject` | POST | `X-API-Key` | Reject a queued review task |
-| `/health` | GET | — | Liveness probe |
-| `/ready` | GET | — | Readiness probe (checks Ollama / Qdrant / compiled graphs) |
+| `/health` | GET | &mdash; | Liveness probe |
+| `/ready` | GET | &mdash; | Readiness probe (checks Ollama / Qdrant / compiled graphs) |
 | `/metrics` | GET | `X-API-Key` | Prometheus scrape endpoint (only mounted when `MEDISCAN_PROMETHEUS=1`) |
 
 ### `POST /analyze`
@@ -295,10 +314,10 @@ Environment variables grouped by concern. Defaults are shown where the code supp
 
 | Variable | Default | Description |
 |---|---|---|
-| `MEDISCAN_API_KEY` | — | Shared secret required on every data route as `X-API-Key`. Must be set in production. |
+| `MEDISCAN_API_KEY` | &mdash; | Shared secret required on every data route as `X-API-Key`. Must be set in production. |
 | `MEDISCAN_ALLOW_ANONYMOUS` | `0` | Local-dev escape hatch: skips auth only when `MEDISCAN_API_KEY` is unset. |
 | `MEDISCAN_ALLOW_USER_API_KEYS` | `0` | When `1`, `/analyze` accepts client-supplied `structuring_api_key` / `reasoning_api_key`; otherwise the server resolves keys from its own env vars. |
-| `MRN_HMAC_PEPPER` | — | Server-held secret for HMAC-SHA256 hashing of MRNs. When unset, retrieval / audit linkage silently no-ops (never falls back to plain SHA-256). |
+| `MRN_HMAC_PEPPER` | &mdash; | Server-held secret for HMAC-SHA256 hashing of MRNs. When unset, retrieval / audit linkage silently no-ops (never falls back to plain SHA-256). |
 | `MEDISCAN_MAX_UPLOAD_BYTES` | `52428800` | Hard cap per upload (50 MiB). |
 | `MEDISCAN_MAX_PDF_PAGES` | `200` | Reject PDFs with more pages than this. |
 | `MEDISCAN_MAX_PIXELS` | `60000000` | Pillow decompression-bomb guard. |
@@ -318,7 +337,7 @@ Environment variables grouped by concern. Defaults are shown where the code supp
 | `MEDISCAN_RENDER_DPI` | `150` | PDF→PNG render DPI. |
 | `VECTOR_STORE` | *(auto)* | Force `qdrant` or `pgvector`; default picks the first configured backend. |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant endpoint. |
-| `QDRANT_API_KEY` | — | Required whenever `QDRANT_URL` points off-host. |
+| `QDRANT_API_KEY` | &mdash; | Required whenever `QDRANT_URL` points off-host. |
 | `QDRANT_ENABLED` | *(auto)* | Set to `1` / `true` to force-enable Qdrant. |
 | `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Embedding model for document indexing. |
 
@@ -326,7 +345,7 @@ Environment variables grouped by concern. Defaults are shown where the code supp
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | — | Server-side provider credentials. |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | &mdash; | Server-side provider credentials. |
 | `MEDISCAN_LLM_TIMEOUT` | `120` | Per-provider request timeout in seconds (forwarded to OpenAI, Anthropic, Gemini, and Ollama SDK clients). |
 | `MEDISCAN_LLM_RETRIES` | `3` | Tenacity `stop_after_attempt`. Transient-only: 4xx auth/validation errors are never retried. |
 | `MEDISCAN_ANTHROPIC_MAX_TOKENS` | `4096` | Anthropic `max_tokens`. |
@@ -344,17 +363,17 @@ Environment variables grouped by concern. Defaults are shown where the code supp
 
 | Variable | Default | Description |
 |---|---|---|
-| `PADDLE_SERVICE_URL` | — | PaddleOCR-VL service-mode endpoint. Server-side only; never accepted from clients. |
+| `PADDLE_SERVICE_URL` | &mdash; | PaddleOCR-VL service-mode endpoint. Server-side only; never accepted from clients. |
 
 ## Known Limitations
 
-- **Bounding boxes** — Ollama-based OCR backends (GLM, DeepSeek) do not emit native bounding boxes. The Annotated, Overlay, and Bounding Boxes tabs in the UI are **empty** for these backends. Bounding box artifacts require PaddleOCR-VL (local or service mode).
-- **Semantic retrieval** — Qdrant retrieval is best-effort: if `QDRANT_URL` is unreachable or `MRN_HMAC_PEPPER` is unset, the retrieval path silently no-ops and contributes zero context. The API response includes `retrieval_enabled: false` when inactive.
-- **pgvector** — Scaffolded but not live. `PgvectorRetrievalStore.is_configured()` returns `False` by default. Qdrant is the only actively exercised retrieval backend.
-- **Patient history** — SQLite returns the latest prior record per MRN, not a full longitudinal timeline.
-- **Human review** — `/review/pending`, `/review/{id}/approve`, and `/review/{id}/reject` expose a queue backed by SQLite. There is no external ticketing integration (e.g. Jira, ServiceNow); production deployments would need to plug that in.
-- **Quality evaluation harness** — `tests/eval/` ships with metric implementations and correctness tests, but `tests/eval/gold/` is intentionally empty; contributors must add real gold JSON fixtures before `pytest -m eval` produces meaningful scores.
-- **Evaluation breadth** — The current harness measures OCR (CER), structured fields (set-F1), and MRN exact-match only. Retrieval relevance and end-to-end reasoning quality are not yet scored.
+- **Bounding boxes** &mdash; Ollama-based OCR backends (GLM, DeepSeek) do not emit native bounding boxes. The Annotated, Overlay, and Bounding Boxes tabs in the UI are **empty** for these backends. Bounding box artifacts require PaddleOCR-VL (local or service mode).
+- **Semantic retrieval** &mdash; Qdrant retrieval is best-effort: if `QDRANT_URL` is unreachable or `MRN_HMAC_PEPPER` is unset, the retrieval path silently no-ops and contributes zero context. The API response includes `retrieval_enabled: false` when inactive.
+- **pgvector** &mdash; Scaffolded but not live. `PgvectorRetrievalStore.is_configured()` returns `False` by default. Qdrant is the only actively exercised retrieval backend.
+- **Patient history** &mdash; SQLite returns the latest prior record per MRN, not a full longitudinal timeline.
+- **Human review** &mdash; `/review/pending`, `/review/{id}/approve`, and `/review/{id}/reject` expose a queue backed by SQLite. There is no external ticketing integration (e.g. Jira, ServiceNow); production deployments would need to plug that in.
+- **Quality evaluation harness** &mdash; `tests/eval/` ships with metric implementations and correctness tests, but `tests/eval/gold/` is intentionally empty; contributors must add real gold JSON fixtures before `pytest -m eval` produces meaningful scores.
+- **Evaluation breadth** &mdash; The current harness measures OCR (CER), structured fields (set-F1), and MRN exact-match only. Retrieval relevance and end-to-end reasoning quality are not yet scored.
 
 ## Roadmap
 
@@ -375,6 +394,6 @@ This project is provided as-is for research and development purposes.
 
 <div align="center">
 
-Built with [FastAPI](https://fastapi.tiangolo.com) · [Streamlit](https://streamlit.io) · [LangGraph](https://langchain-ai.github.io/langgraph/) · [Qdrant](https://qdrant.tech) · [Ollama](https://ollama.com)
+Built with [FastAPI](https://fastapi.tiangolo.com) &middot; [Streamlit](https://streamlit.io) &middot; [LangGraph](https://langchain-ai.github.io/langgraph/) &middot; [Qdrant](https://qdrant.tech) &middot; [Ollama](https://ollama.com)
 
 </div>
