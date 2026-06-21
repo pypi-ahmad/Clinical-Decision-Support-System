@@ -8,7 +8,6 @@ from typing import Any
 
 import ollama
 
-
 DEFAULT_EMBED_MODEL = "nomic-embed-text"
 
 

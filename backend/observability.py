@@ -102,7 +102,7 @@ def record_node_duration(node: str, seconds: float) -> None:
         hist.labels(node=node).observe(max(0.0, float(seconds)))
 
 
-def instrument_app(app: "FastAPI") -> None:
+def instrument_app(app: FastAPI) -> None:
     """Attach Prometheus /metrics + OpenTelemetry FastAPI instrumentation.
 
     Safe to call unconditionally; each feature is guarded by its env flag and
@@ -110,9 +110,9 @@ def instrument_app(app: "FastAPI") -> None:
     """
     if _flag("MEDISCAN_PROMETHEUS"):
         try:
+            from fastapi import Depends
             from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
             from starlette.responses import Response
-            from fastapi import Depends
 
             from backend.security import require_api_key
 
@@ -143,7 +143,7 @@ def instrument_app(app: "FastAPI") -> None:
 # --- Request context middleware ---------------------------------------------
 
 
-def install_request_context_middleware(app: "FastAPI") -> None:
+def install_request_context_middleware(app: FastAPI) -> None:
     """Attach an ASGI middleware that adds a per-request correlation ID.
 
     Behavior:
@@ -165,9 +165,11 @@ def install_request_context_middleware(app: "FastAPI") -> None:
     async def _request_context(request, call_next):  # type: ignore[no-untyped-def]
         incoming = request.headers.get(REQUEST_ID_HEADER, "")
         # Only accept safe characters; otherwise generate a fresh id.
-        request_id = incoming if incoming and all(
-            c.isalnum() or c in "-_" for c in incoming
-        ) and len(incoming) <= 128 else uuid.uuid4().hex
+        request_id = (
+            incoming
+            if incoming and all(c.isalnum() or c in "-_" for c in incoming) and len(incoming) <= 128
+            else uuid.uuid4().hex
+        )
 
         if structlog is not None:
             structlog.contextvars.clear_contextvars()

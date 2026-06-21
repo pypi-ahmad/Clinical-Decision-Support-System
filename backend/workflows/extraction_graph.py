@@ -243,6 +243,7 @@ def _split_pages_node(state: ExtractionGraphState) -> ExtractionGraphState:
     if suffix == ".pdf":
         try:
             from pdf2image import pdfinfo_from_path
+
             info = pdfinfo_from_path(file_path)
             page_count = info.get("Pages", 0)
         except Exception:

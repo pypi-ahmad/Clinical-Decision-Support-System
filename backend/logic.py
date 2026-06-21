@@ -10,7 +10,6 @@ from backend.logging_config import get_logger
 from backend.retrieval.chunking import sanitize_retrieved_text
 from backend.security import firewall_clause, generate_boundary_nonce, wrap_untrusted
 
-
 _logger = get_logger(__name__)
 
 
@@ -111,9 +110,7 @@ def analyze_medical_logic(
     )
 
     user_text = (
-        f"CURRENT_DATA:\n{current_section}\n\n"
-        f"PAST_DATA:\n{past_section}\n\n"
-        f"RETRIEVED_CONTEXT:\n{context_section}"
+        f"CURRENT_DATA:\n{current_section}\n\nPAST_DATA:\n{past_section}\n\nRETRIEVED_CONTEXT:\n{context_section}"
     )
     system_prompt = _REASONING_SYSTEM_TEMPLATE + "\n" + firewall_clause(nonce)
 

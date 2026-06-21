@@ -12,7 +12,8 @@ import logging
 import os
 import re
 import sys
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 try:
     import structlog
@@ -97,9 +98,7 @@ def configure_logging(level: str | None = None) -> None:
                 phi_redactor,
                 structlog.processors.JSONRenderer(),
             ],
-            wrapper_class=structlog.make_filtering_bound_logger(
-                getattr(logging, effective, logging.INFO)
-            ),
+            wrapper_class=structlog.make_filtering_bound_logger(getattr(logging, effective, logging.INFO)),
             cache_logger_on_first_use=True,
         )
     _configured = True

@@ -14,7 +14,6 @@ from typing import Any
 
 from backend.retrieval.vector_store import RetrievalChunk
 
-
 DEFAULT_CHUNK_SIZE = int(os.environ.get("MEDISCAN_CHUNK_SIZE", 1200))
 DEFAULT_CHUNK_OVERLAP = int(os.environ.get("MEDISCAN_CHUNK_OVERLAP", 150))
 

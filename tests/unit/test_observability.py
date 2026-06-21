@@ -62,9 +62,7 @@ def test_record_llm_call_emitted_on_success(monkeypatch):
     monkeypatch.setattr("backend.observability.record_llm_call", _fake_record, raising=False)
 
     # Stub out the provider call so no network is used.
-    monkeypatch.setattr(
-        ai_wrapper, "_call_ollama", lambda *a, **kw: '{"ok": true}'
-    )
+    monkeypatch.setattr(ai_wrapper, "_call_ollama", lambda *a, **kw: '{"ok": true}')
 
     out = ai_wrapper.get_ai_response("Ollama", "llama3", None, "sys", "usr")
     assert out == '{"ok": true}'

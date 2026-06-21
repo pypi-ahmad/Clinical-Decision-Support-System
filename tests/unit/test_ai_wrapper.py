@@ -7,18 +7,18 @@ from backend.ai_wrapper import AIProviderError
 
 
 def test_clean_json_output_strips_fences_and_extracts_json_object():
-    raw = "```json\n{\"a\": 1, \"b\": 2}\n```"
+    raw = '```json\n{"a": 1, "b": 2}\n```'
     assert ai_wrapper.clean_json_output(raw) == '{"a": 1, "b": 2}'
 
 
 def test_parse_model_json_handles_prose_then_object():
-    raw = "Sure, here is the JSON: {\"eligible\": true, \"confidence\": \"High\"}"
+    raw = 'Sure, here is the JSON: {"eligible": true, "confidence": "High"}'
     parsed = ai_wrapper.parse_model_json(raw)
     assert parsed == {"eligible": True, "confidence": "High"}
 
 
 def test_parse_model_json_handles_string_with_braces_inside():
-    raw = "{\"note\": \"contains {{ braces }} fine\", \"ok\": true}"
+    raw = '{"note": "contains {{ braces }} fine", "ok": true}'
     assert ai_wrapper.parse_model_json(raw) == {"note": "contains {{ braces }} fine", "ok": True}
 
 
@@ -203,8 +203,8 @@ def test_ai_provider_error_redacts_openai_key():
 def test_parse_model_json_prefers_longest_object_over_decoy():
     """Earlier {...} decoy (e.g. an example) must not hide the real payload."""
     raw = (
-        "Here is an example: {\"example\": true}.\n"
-        "And here is the real answer: {\"eligible\": false, \"confidence\": \"Low\", \"reasons\": [\"x\"]}"
+        'Here is an example: {"example": true}.\n'
+        'And here is the real answer: {"eligible": false, "confidence": "Low", "reasons": ["x"]}'
     )
     parsed = ai_wrapper.parse_model_json(raw)
     assert parsed == {"eligible": False, "confidence": "Low", "reasons": ["x"]}
@@ -212,18 +212,18 @@ def test_parse_model_json_prefers_longest_object_over_decoy():
 
 def test_parse_model_json_extracts_fenced_block_after_prose():
     """Fenced block may appear after explanatory prose (not only as a prefix)."""
-    raw = "Thinking... here it is:\n```json\n{\"a\": 1, \"b\": [1, 2]}\n```\nDone."
+    raw = 'Thinking... here it is:\n```json\n{"a": 1, "b": [1, 2]}\n```\nDone.'
     assert ai_wrapper.parse_model_json(raw) == {"a": 1, "b": [1, 2]}
 
 
 def test_parse_model_json_plain_fence_without_json_tag():
-    raw = "```\n{\"ok\": true}\n```"
+    raw = '```\n{"ok": true}\n```'
     assert ai_wrapper.parse_model_json(raw) == {"ok": True}
 
 
 def test_parse_model_json_accepts_array_with_leading_object():
     """Some providers wrap output as [{...}]. Unwrap the first object."""
-    raw = "[{\"mrn\": \"A\", \"dx\": \"X\"}]"
+    raw = '[{"mrn": "A", "dx": "X"}]'
     assert ai_wrapper.parse_model_json(raw) == {"mrn": "A", "dx": "X"}
 
 
@@ -256,7 +256,7 @@ def test_parse_model_json_rejects_top_level_scalar_or_list():
 
 def test_parse_model_json_object_with_brace_literal_in_string():
     """Braces inside a string literal must not confuse the balanced scanner."""
-    raw = "Preamble. {\"code\": \"if (x) { return 1; }\", \"ok\": true}"
+    raw = 'Preamble. {"code": "if (x) { return 1; }", "ok": true}'
     assert ai_wrapper.parse_model_json(raw) == {
         "code": "if (x) { return 1; }",
         "ok": True,
@@ -289,10 +289,10 @@ def test_openai_client_is_cached_per_key_and_timeout(monkeypatch):
     b = ai_wrapper._get_openai_client("k2", 30)
     c = ai_wrapper._get_openai_client("k1", 60)
 
-    assert a1 is a2                     # same key+timeout => same object
-    assert a1 is not b                  # different key => new object
-    assert a1 is not c                  # different timeout => new object
-    assert len(calls) == 3              # constructor hit exactly 3 times
+    assert a1 is a2  # same key+timeout => same object
+    assert a1 is not b  # different key => new object
+    assert a1 is not c  # different timeout => new object
+    assert len(calls) == 3  # constructor hit exactly 3 times
 
 
 def test_anthropic_client_is_cached_per_key_and_timeout(monkeypatch):

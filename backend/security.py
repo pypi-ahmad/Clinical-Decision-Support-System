@@ -8,12 +8,11 @@ import os
 import re
 import secrets
 import socket
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 from urllib.parse import urlparse
 
 from fastapi import Header, HTTPException, UploadFile, status
-
 
 # ---------------------------------------------------------------------------
 # 1. API-key auth (simple bearer; upgradeable to OIDC later)
@@ -210,9 +209,7 @@ def validate_outbound_url(url: str, *, allow_loopback: bool = False) -> str:
         )
     host = parsed.hostname
     if not host:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="URL missing host."
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="URL missing host.")
     try:
         addrinfo = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
     except OSError as exc:
@@ -277,11 +274,7 @@ def wrap_untrusted(content: str, nonce: str | None = None) -> tuple[str, str]:
     prompt so the LLM can recognise the delimiters.
     """
     nonce = nonce or generate_boundary_nonce()
-    wrapped = (
-        f"<<<UNTRUSTED_DOCUMENT_{nonce}_BEGIN>>>\n"
-        f"{content}\n"
-        f"<<<UNTRUSTED_DOCUMENT_{nonce}_END>>>"
-    )
+    wrapped = f"<<<UNTRUSTED_DOCUMENT_{nonce}_BEGIN>>>\n{content}\n<<<UNTRUSTED_DOCUMENT_{nonce}_END>>>"
     return wrapped, nonce
 
 

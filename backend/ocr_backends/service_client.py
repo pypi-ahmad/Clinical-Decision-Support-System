@@ -11,16 +11,15 @@ Notable hardening:
 from __future__ import annotations
 
 import os
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
 import requests  # kept as a compatibility import for existing test monkeypatches
 
 from backend.logging_config import get_logger
 from backend.security import validate_outbound_url
-
 
 _ = requests  # silence "unused import" while remaining importable
 

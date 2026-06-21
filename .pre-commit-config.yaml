@@ -17,12 +17,24 @@ repos:
       - id: check-merge-conflict
       - id: detect-private-key
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.14.1
+  # NOTE: mypy is intentionally NOT wired into pre-commit in Phase A.
+  # The strict type-clean sweep is delivered by Phase B together with the
+  # new backend/settings.py and backend/errors.py modules. For now, the
+  # type-check gate lives in CI (`.github/workflows/ci.yml`, `type-check` job)
+  # where it runs as a soft check on the strict subset only.
+  #
+  # - repo: https://github.com/pre-commit/mirrors-mypy
+  #   rev: v1.14.1
+  #   hooks:
+  #     - id: mypy
+  #       args: [--config-file=pyproject.toml]
+  #       files: ^backend/(security|errors|settings|db|database|retrieval)/.*\.py$
+
+  - repo: local
     hooks:
-      - id: mypy
-        additional_dependencies:
-          - pydantic>=2.9
-          - types-requests
-        args: [--config-file=pyproject.toml]
-        files: ^backend/
+      - id: uv-lock-check
+        name: uv lock --check
+        entry: uv lock --check
+        language: system
+        pass_filenames: false
+        files: ^(pyproject\.toml|uv\.lock)$

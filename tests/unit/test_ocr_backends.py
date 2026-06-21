@@ -10,6 +10,7 @@ Covers:
 - PaddleOCRVLServiceClient error/success handling
 - PaddleOCR-VL serialization helpers
 """
+
 from __future__ import annotations
 
 import json
@@ -27,8 +28,11 @@ from backend.ocr_backends.base import (
     collect_bounding_boxes,
 )
 from backend.ocr_backends.ollama_ocr import GLM_PROMPTS, OllamaOCRBackend, _build_prompt
-from backend.ocr_backends.service_client import PaddleOCRVLServiceClient, PaddleOCRVLServiceError, PaddleOCRVLServiceSettings
-
+from backend.ocr_backends.service_client import (
+    PaddleOCRVLServiceClient,
+    PaddleOCRVLServiceError,
+    PaddleOCRVLServiceSettings,
+)
 
 # ---------------------------------------------------------------------------
 # OCRBackendConfig normalization
@@ -275,7 +279,8 @@ def test_aggregate_page_results_collects_bounding_boxes():
 
 def test_annotate_document_creates_annotated_images(tmp_path):
     from PIL import Image
-    from backend.artifacts import annotate_document, create_document_workspace, DocumentWorkspace
+
+    from backend.artifacts import DocumentWorkspace, annotate_document, create_document_workspace
 
     image_path = tmp_path / "page_0001.png"
     img = Image.new("RGB", (200, 300), color=(255, 255, 255))
@@ -315,7 +320,8 @@ def test_annotate_document_no_boxes_skips_image_work(tmp_path):
     bboxes, so re-opening each page through Pillow would be pure overhead.
     """
     from PIL import Image
-    from backend.artifacts import annotate_document, DocumentWorkspace
+
+    from backend.artifacts import DocumentWorkspace, annotate_document
 
     image_path = tmp_path / "page_0001.png"
     img = Image.new("RGB", (100, 100), color=(200, 200, 200))
@@ -337,7 +343,7 @@ def test_annotate_document_no_boxes_skips_image_work(tmp_path):
 
 
 def test_annotate_document_missing_image_skipped(tmp_path):
-    from backend.artifacts import annotate_document, DocumentWorkspace
+    from backend.artifacts import DocumentWorkspace, annotate_document
 
     workspace = DocumentWorkspace(
         source_file_path=str(tmp_path / "missing.png"),
@@ -360,7 +366,7 @@ def test_annotate_document_missing_image_skipped(tmp_path):
 
 
 def test_build_artifact_manifest_maps_paths_to_urls(tmp_path, monkeypatch):
-    from backend.artifacts import UPLOAD_ROOT, build_artifact_manifest, DocumentWorkspace
+    from backend.artifacts import UPLOAD_ROOT, DocumentWorkspace, build_artifact_manifest
 
     fake_upload_root = tmp_path / "uploads"
     fake_upload_root.mkdir()

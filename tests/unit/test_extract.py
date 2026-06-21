@@ -14,7 +14,8 @@ def test_process_document_pipeline_image_success(monkeypatch, tmp_path):
     monkeypatch.setattr(
         extract,
         "get_ai_response",
-        lambda *args, **kwargs: '{"patient": {}, "encounter": {}, "clinical": {"diagnosis_list": [], "medications": [], "vitals": {}}}',
+        lambda *args,
+        **kwargs: '{"patient": {}, "encounter": {}, "clinical": {"diagnosis_list": [], "medications": [], "vitals": {}}}',
     )
 
     result = extract.process_document_pipeline(str(image_file), "Ollama", "m", None)
@@ -48,7 +49,7 @@ def test_process_document_pipeline_ocr_failure(monkeypatch, tmp_path):
 
     result = extract.process_document_pipeline(str(image_file))
     assert "error" in result
-    assert "Ollama OCR failed" in result["error"]
+    assert "GLM-OCR failed" in result["error"]
 
 
 def test_process_document_pipeline_pdf_success(monkeypatch, tmp_path):
@@ -68,7 +69,8 @@ def test_process_document_pipeline_pdf_success(monkeypatch, tmp_path):
     monkeypatch.setattr(
         extract,
         "get_ai_response",
-        lambda *args, **kwargs: '{"patient": {}, "encounter": {}, "clinical": {"diagnosis_list": [], "medications": [], "vitals": {}}}',
+        lambda *args,
+        **kwargs: '{"patient": {}, "encounter": {}, "clinical": {"diagnosis_list": [], "medications": [], "vitals": {}}}',
     )
 
     result = extract.process_document_pipeline(str(pdf_file), "Ollama", "m", None)
@@ -110,10 +112,12 @@ def test_run_document_ocr_returns_multi_page_payload(monkeypatch, tmp_path):
     mock_page_two = MagicMock()
     monkeypatch.setattr(extract, "convert_from_path", lambda path, **kwargs: [mock_page_one, mock_page_two])
 
-    responses = iter([
-        {"message": {"content": "page one text"}},
-        {"message": {"content": "page two text"}},
-    ])
+    responses = iter(
+        [
+            {"message": {"content": "page one text"}},
+            {"message": {"content": "page two text"}},
+        ]
+    )
     monkeypatch.setattr(
         extract,
         "ollama",

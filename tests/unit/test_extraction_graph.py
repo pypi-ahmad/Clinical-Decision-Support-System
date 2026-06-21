@@ -4,6 +4,7 @@ Tests for backend/workflows/extraction_graph.py
 Covers each graph node in isolation as well as the conditional routing.
 LangGraph is imported only where available; if absent, tests are skipped.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -73,6 +74,7 @@ def test_split_pages_node_counts_pdf_pages(tmp_path):
     """split_pages should report the real page count for a PDF."""
     # Create a minimal valid PDF (1-page)
     from PIL import Image
+
     img = Image.new("RGB", (100, 100), "white")
     pdf_path = tmp_path / "test.pdf"
     img.save(str(pdf_path), "PDF")
@@ -336,7 +338,10 @@ def test_retrieve_context_node_with_store(monkeypatch):
 
     state = eg._retrieve_context_node(
         {
-            "normalized_fields": {"patient": {"mrn": "MRN-1"}, "clinical": {"diagnosis_list": ["HTN"], "medications": []}},
+            "normalized_fields": {
+                "patient": {"mrn": "MRN-1"},
+                "clinical": {"diagnosis_list": ["HTN"], "medications": []},
+            },
         }
     )
     assert len(state["retrieved_context"]) == 1
@@ -459,7 +464,12 @@ def test_compiled_extraction_graph_runs_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(
         eg,
         "get_ai_response",
-        lambda prov, model, key, sys, user, **kwargs: '{"patient": {"full_name": "John Doe", "mrn": "MRN-1"}, "encounter": {"date": "2024-06-01"}, "clinical": {"diagnosis_list": ["HTN"], "medications": [], "vitals": {"bp": "130/85"}}}',
+        lambda prov,
+        model,
+        key,
+        sys,
+        user,
+        **kwargs: '{"patient": {"full_name": "John Doe", "mrn": "MRN-1"}, "encounter": {"date": "2024-06-01"}, "clinical": {"diagnosis_list": ["HTN"], "medications": [], "vitals": {"bp": "130/85"}}}',
     )
     monkeypatch.setattr(eg, "clean_json_output", lambda s: s)
     monkeypatch.setattr(eg, "create_vector_store", lambda: None)
