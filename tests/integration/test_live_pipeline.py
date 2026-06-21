@@ -94,18 +94,18 @@ def sample_image(tmp_path: Path) -> Path:
 
 def test_live_ocr_produces_raw_text(sample_image: Path):
     """Run real Ollama OCR on an image and verify we get text back."""
-    _require_ollama_model("deepseek-ocr")
+    _require_ollama_model("glm-ocr")
     from backend.extract import run_document_ocr
 
     payload = run_document_ocr(
         str(sample_image),
         ocr_backend="ollama",
-        ocr_model="deepseek-ocr",
+        ocr_model="glm-ocr",
         ocr_prompt_mode="text",
         use_gpu=True,
     )
 
-    _skip_on_model_error(payload, "deepseek-ocr")
+    _skip_on_model_error(payload, "glm-ocr")
     assert "error" not in payload, f"OCR failed: {payload.get('error')}"
     raw = payload.get("raw_text") or payload.get("markdown") or ""
     assert len(raw) > 0, "OCR returned empty text"
@@ -113,7 +113,7 @@ def test_live_ocr_produces_raw_text(sample_image: Path):
 
 def test_live_structuring_returns_valid_json(sample_image: Path):
     """Run real OCR + structuring and verify the result parses as JSON."""
-    _require_ollama_model("deepseek-ocr")
+    _require_ollama_model("glm-ocr")
     _require_ollama_model("glm-4.7-flash")
     from backend.extract import process_document_pipeline
 
@@ -123,11 +123,11 @@ def test_live_structuring_returns_valid_json(sample_image: Path):
         model="glm-4.7-flash",
         api_key=None,
         ocr_backend="ollama",
-        ocr_model="deepseek-ocr",
+        ocr_model="glm-ocr",
         return_details=True,
     )
 
-    _skip_on_model_error(result, "deepseek-ocr / glm-4.7-flash")
+    _skip_on_model_error(result, "glm-ocr / glm-4.7-flash")
     assert "error" not in result, f"Pipeline failed: {result.get('error')}"
     structured = result.get("structured_data") or result
     assert isinstance(structured, dict)
@@ -138,7 +138,7 @@ def test_live_structuring_returns_valid_json(sample_image: Path):
 
 def test_live_reasoning_produces_analysis(sample_image: Path):
     """Run real OCR + structuring + reasoning and verify analysis output."""
-    _require_ollama_model("deepseek-ocr")
+    _require_ollama_model("glm-ocr")
     _require_ollama_model("glm-4.7-flash")
     from backend.extract import process_document_pipeline
     from backend.logic import analyze_medical_logic
@@ -149,11 +149,11 @@ def test_live_reasoning_produces_analysis(sample_image: Path):
         model="glm-4.7-flash",
         api_key=None,
         ocr_backend="ollama",
-        ocr_model="deepseek-ocr",
+        ocr_model="glm-ocr",
         return_details=True,
     )
 
-    _skip_on_model_error(result, "deepseek-ocr / glm-4.7-flash")
+    _skip_on_model_error(result, "glm-ocr / glm-4.7-flash")
     assert "error" not in result, f"Pipeline failed: {result.get('error')}"
     structured = result.get("structured_data") or result
 
@@ -250,33 +250,35 @@ if _qdrant_url:
 @pytest.mark.skipif(not _ollama_available, reason="Ollama server not reachable")
 def test_live_qdrant_index_and_retrieve():
     """Index a synthetic document into Qdrant and retrieve it by patient hash."""
-    from backend.retrieval.embeddings import OllamaEmbeddings
-    from backend.retrieval.qdrant_store import QdrantVectorStore
-    from backend.retrieval.chunking import chunk_text
+    from backend.retrieval import hash_identifier
+    from backend.retrieval.chunking import build_chunks_from_text
+    from backend.retrieval.qdrant_store import QdrantRetrievalStore
+    from backend.retrieval.vector_store import RetrievalChunk
 
     collection = "test_live_mediscan"
-    store = QdrantVectorStore(url=_qdrant_url, collection_name=collection)
-    embedder = OllamaEmbeddings()
+    store = QdrantRetrievalStore(collection_name=collection)
 
     text = "Patient MRN-LIVE-QDRANT diagnosed with pneumonia. Prescribed amoxicillin 500 mg."
-    chunks = chunk_text(text, chunk_size=200, overlap=50)
 
-    import hashlib
+    # Use the production HMAC path so the filter matches what the rest of
+    # the system writes; this test is gated on MRN_HMAC_PEPPER being set
+    # (see tests/conftest.py), but guard explicitly in case it was unset.
+    patient_hash = hash_identifier("MRN-LIVE-QDRANT")
+    if not patient_hash:
+        pytest.skip("MRN_HMAC_PEPPER must be set for the Qdrant live test")
 
-    patient_hash = hashlib.sha256("MRN-LIVE-QDRANT".encode()).hexdigest()
+    metadata = {
+        "patient_id_hash": patient_hash,
+        "source_type": "medical_record",
+    }
+    chunks = build_chunks_from_text("live_test_doc", text, metadata, section_type="ocr_document")
+    status = store.upsert_chunks(chunks)
+    assert status.get("indexed") is True, f"upsert failed: {status}"
 
-    vectors = [embedder.embed(c) for c in chunks]
-    metadata = [
-        {"patient_id_hash": patient_hash, "source_type": "medical_record", "page_number": 1}
-        for _ in chunks
-    ]
-    store.upsert(texts=chunks, vectors=vectors, metadata=metadata)
-
-    query_vec = embedder.embed("pneumonia treatment")
     results = store.search(
-        vector=query_vec,
+        "pneumonia treatment",
         limit=3,
-        filters={"patient_id_hash": patient_hash},
+        filters={"patient_id_hash": patient_hash, "source_type": "medical_record"},
     )
 
     assert len(results) > 0, "Qdrant returned no results for indexed document"
@@ -299,7 +301,7 @@ def test_live_qdrant_index_and_retrieve():
 @pytest.mark.skipif(not _ollama_available, reason="Ollama server not reachable")
 def test_live_multipage_pdf(tmp_path: Path):
     """Process a synthetically constructed 2-page PDF through the full pipeline."""
-    _require_ollama_model("deepseek-ocr")
+    _require_ollama_model("glm-ocr")
     _require_ollama_model("glm-4.7-flash")
     try:
         from reportlab.lib.pagesizes import letter
@@ -325,7 +327,7 @@ def test_live_multipage_pdf(tmp_path: Path):
         model="glm-4.7-flash",
         api_key=None,
         ocr_backend="ollama",
-        ocr_model="deepseek-ocr",
+        ocr_model="glm-ocr",
         return_details=True,
     )
 

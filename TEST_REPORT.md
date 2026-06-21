@@ -35,7 +35,7 @@
 | `tests/unit/test_main_unit.py` | 7 | Auth, upload, /confirm payload validation, route signatures |
 | `tests/unit/test_models.py` | 2 | Field truncation, date coercion, extra-key handling |
 | `tests/unit/test_observability.py` | ~5 | Prometheus metric registration, request-id middleware, LLM call recorder |
-| `tests/unit/test_ocr_backends.py` | ~25 | Backend dispatch, GLM/DeepSeek prompts, Paddle local &amp; service mocks, bbox aggregation |
+| `tests/unit/test_ocr_backends.py` | ~25 | Backend dispatch, GLM prompt modes, Paddle local &amp; service mocks, bbox aggregation |
 | `tests/unit/test_retrieval.py` | ~22 | HMAC hash, chunker, embeddings, Qdrant store (mocked), factory selection |
 | `tests/integration/test_api_workflows.py` | ~12 | FastAPI `TestClient` end-to-end happy and error paths |
 | `tests/integration/test_live_pipeline.py` | 8 (all auto-skip without services) | Real Ollama + Qdrant + multi-page PDF |

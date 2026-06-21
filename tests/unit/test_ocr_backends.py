@@ -2,7 +2,7 @@
 Tests for OCR backend implementations.
 
 Covers:
-- OllamaOCRBackend: GLM prompt modes, DeepSeek prompts, multi-page aggregation
+- OllamaOCRBackend: GLM prompt modes, multi-page aggregation
 - OCRBackendConfig normalization
 - collect_bounding_boxes polygon parsing
 - annotate_document bounding box rendering
@@ -26,7 +26,7 @@ from backend.ocr_backends.base import (
     aggregate_page_results,
     collect_bounding_boxes,
 )
-from backend.ocr_backends.ollama_ocr import GLM_PROMPTS, DEEPSEEK_PROMPTS, OllamaOCRBackend, _build_prompt
+from backend.ocr_backends.ollama_ocr import GLM_PROMPTS, OllamaOCRBackend, _build_prompt
 from backend.ocr_backends.service_client import PaddleOCRVLServiceClient, PaddleOCRVLServiceError, PaddleOCRVLServiceSettings
 
 
@@ -46,9 +46,10 @@ def test_backend_config_normalizes_paddle_variants():
         assert config.normalized_backend == "paddle", f"Expected 'paddle' for {variant!r}"
 
 
-def test_backend_config_normalizes_ollama():
+def test_backend_config_normalizes_ollama_to_glm():
+    """The historical ``ollama`` value is preserved as an alias for ``glm``."""
     config = OCRBackendConfig(backend="ollama")
-    assert config.normalized_backend == "ollama"
+    assert config.normalized_backend == "glm"
 
 
 def test_backend_config_resolved_model_uses_default_for_glm():
@@ -56,9 +57,9 @@ def test_backend_config_resolved_model_uses_default_for_glm():
     assert config.resolved_model == "glm-ocr"
 
 
-def test_backend_config_resolved_model_uses_default_for_ollama():
+def test_backend_config_resolved_model_uses_default_for_ollama_alias():
     config = OCRBackendConfig(backend="ollama", model=None)
-    assert config.resolved_model == "deepseek-ocr"
+    assert config.resolved_model == "glm-ocr"
 
 
 def test_backend_config_resolved_model_respects_override():
@@ -96,19 +97,10 @@ def test_glm_prompt_unknown_mode_falls_back_to_text():
     assert _build_prompt(config) == GLM_PROMPTS["text"]
 
 
-# ---------------------------------------------------------------------------
-# OllamaOCRBackend – DeepSeek prompts
-# ---------------------------------------------------------------------------
-
-
-def test_deepseek_prompt_text_mode():
+def test_glm_prompt_is_used_for_ollama_alias():
+    """Even with the historical ``ollama`` alias the GLM prompt set is used."""
     config = OCRBackendConfig(backend="ollama", ocr_mode="text")
-    assert _build_prompt(config) == DEEPSEEK_PROMPTS["text"]
-
-
-def test_deepseek_prompt_table_mode():
-    config = OCRBackendConfig(backend="ollama", ocr_mode="table")
-    assert _build_prompt(config) == DEEPSEEK_PROMPTS["table"]
+    assert _build_prompt(config) == GLM_PROMPTS["text"]
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +127,7 @@ def test_ollama_ocr_backend_runs_multi_page(tmp_path):
 
     fake_ollama = type("FakeOllama", (), {"chat": staticmethod(fake_chat)})()
     backend = OllamaOCRBackend(ollama_client=fake_ollama)
-    config = OCRBackendConfig(backend="ollama", model="deepseek-ocr", ocr_mode="text")
+    config = OCRBackendConfig(backend="glm", model="glm-ocr", ocr_mode="text")
 
     result = backend.run("doc.pdf", page_image_paths, config)
 
@@ -240,11 +232,11 @@ def test_aggregate_page_results_combines_text():
         OCRPageResult(page_number=1, raw_text="first page", markdown="first page"),
         OCRPageResult(page_number=2, raw_text="second page", markdown="second page"),
     ]
-    result = aggregate_page_results("ollama", "deepseek-ocr", "text", pages)
+    result = aggregate_page_results("glm", "glm-ocr", "text", pages)
     assert "PAGE 1" in result.raw_text
     assert "PAGE 2" in result.raw_text
-    assert result.backend == "ollama"
-    assert result.model == "deepseek-ocr"
+    assert result.backend == "glm"
+    assert result.model == "glm-ocr"
     assert len(result.per_page_results) == 2
 
 
@@ -253,7 +245,7 @@ def test_aggregate_page_results_averages_confidence():
         OCRPageResult(page_number=1, raw_text="a", confidence=0.8),
         OCRPageResult(page_number=2, raw_text="b", confidence=0.6),
     ]
-    result = aggregate_page_results("ollama", "deepseek-ocr", "text", pages)
+    result = aggregate_page_results("glm", "glm-ocr", "text", pages)
     assert result.confidence == pytest.approx(0.7)
 
 
@@ -261,7 +253,7 @@ def test_aggregate_page_results_no_confidence_if_none():
     pages = [
         OCRPageResult(page_number=1, raw_text="a"),
     ]
-    result = aggregate_page_results("ollama", "deepseek-ocr", "text", pages)
+    result = aggregate_page_results("glm", "glm-ocr", "text", pages)
     assert result.confidence is None
 
 
@@ -272,7 +264,7 @@ def test_aggregate_page_results_collects_bounding_boxes():
         OCRPageResult(page_number=1, raw_text="a", bounding_boxes=[box1]),
         OCRPageResult(page_number=2, raw_text="b", bounding_boxes=[box2]),
     ]
-    result = aggregate_page_results("ollama", "deepseek-ocr", "text", pages)
+    result = aggregate_page_results("glm", "glm-ocr", "text", pages)
     assert len(result.bounding_boxes) == 2
 
 
@@ -319,7 +311,7 @@ def test_annotate_document_creates_annotated_images(tmp_path):
 def test_annotate_document_no_boxes_skips_image_work(tmp_path):
     """When no bounding boxes are present ``annotate_document`` is a no-op.
 
-    This is a deliberate optimisation: Ollama/GLM/DeepSeek never produce
+    This is a deliberate optimisation: Ollama/GLM never produce
     bboxes, so re-opening each page through Pillow would be pure overhead.
     """
     from PIL import Image

@@ -162,7 +162,7 @@ def annotate_document(
     workspace: DocumentWorkspace,
 ) -> DocumentWorkspace:
     # Fast-path: no boxes → no Pillow work, no annotated PDF. Saves ~hundreds
-    # of ms for Ollama/DeepSeek/GLM which never emit bboxes.
+    # of ms for Ollama/GLM which never emit bboxes.
     if not bounding_boxes:
         return workspace
 

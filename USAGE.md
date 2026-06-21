@@ -9,7 +9,7 @@ MediScan OCR is a clinical decision-support system that automates medical docume
 | Capability | Description |
 |---|---|
 | **Document Ingestion** | Multi-page PDF and image upload with automatic page rendering and artifact management. |
-| **Pluggable OCR** | Interchangeable OCR backends — GLM-OCR (default), DeepSeek-OCR, and PaddleOCR-VL — with configurable prompt modes. |
+| **Pluggable OCR** | Interchangeable OCR backends — GLM-OCR (default, via Ollama) and PaddleOCR-VL — with configurable prompt modes. |
 | **Structured Extraction** | LLM-driven extraction of patient demographics, vitals, diagnoses (with ICD codes), medications, and clinical notes into a normalized JSON schema. |
 | **Clinical Reasoning** | Automated trend detection, alert generation, and narrative summarization powered by a separately configurable reasoning model. |
 | **Insurance Verification** | Policy document ingestion (plain text or OCR), semantic comparison against extracted diagnoses, and eligibility determination with explainable reasoning. |
@@ -37,7 +37,7 @@ MediScan OCR is a clinical decision-support system that automates medical docume
 │  ┌──────────────────────────┐  ┌───────────────────────────┐        │
 │  │  OCR Backends            │  │  Retrieval                │        │
 │  │  GLM-OCR (default)       │  │  Qdrant (active)          │        │
-│  │  DeepSeek / PaddleOCR-VL │  │  pgvector (scaffold)      │        │
+│  │  PaddleOCR-VL            │  │  pgvector (scaffold)      │        │
 │  └──────────────────────────┘  └───────────────────────────┘        │
 │                                        │                            │
 │  ┌─────────────────────────────────────┴──────────────────────────┐ │
@@ -138,13 +138,13 @@ Select the engine used for optical character recognition.
 | Option | Engine | Bounding Boxes | Default | Notes |
 |---|---|---|---|---|
 | **GLM-OCR (Ollama)** | Ollama + GLM-OCR prompts | No | **Yes** | Supports text, table, figure, formula, chart prompt modes |
-| DeepSeek-OCR (Ollama) | Ollama + DeepSeek prompts | No | — | Text-focused, fast |
+| DeepSeek-OCR (Ollama) | _removed_ | — | — | Removed in favor of GLM-OCR. |
 | PaddleOCR-VL-1.5 (Local Python) | Local PaddleOCR-VL runtime | Yes | — | Requires `paddleocr[doc-parser]` install |
 | PaddleOCR-VL-1.5 (Local Service) | HTTP service client | Yes | — | The service URL is **server-configured only** via the `PADDLE_SERVICE_URL` environment variable — clients cannot override it |
 
 #### OCR Mode
 
-The sidebar exposes the full prompt-mode list supported by the GLM-OCR backend: `text`, `ocr`, `table`, `formula`, `chart`, `spotting`, `seal`. `text` is the default and the recommended choice for narrative clinical records. The remaining modes are forwarded verbatim to the vision model as the prompt template selector. DeepSeek-OCR supports `text` mode only.
+The sidebar exposes the full prompt-mode list supported by the GLM-OCR backend: `text`, `ocr`, `table`, `formula`, `chart`, `spotting`, `seal`. `text` is the default and the recommended choice for narrative clinical records. The remaining modes are forwarded verbatim to the vision model as the prompt template selector.
 
 #### Extraction Workflow
 
@@ -391,7 +391,7 @@ Before relying on a feature, confirm the underlying service is reachable. The ta
 ```bash
 # Verify the server is running and your models are available
 ollama list
-# Expected: lists pulled models (e.g., glm-ocr, glm-4.7-flash, deepseek-ocr)
+# Expected: lists pulled models (e.g., glm-ocr, glm-4.7-flash)
 
 # Pull GLM-OCR if not already available (default OCR backend)
 ollama pull glm-ocr
@@ -434,11 +434,11 @@ $env:QDRANT_ENABLED = "true"
 
 ### Bounding Box Artifacts
 
-The Annotated, Overlay, and Bounding Boxes tabs in the UI only populate when using a PaddleOCR-VL backend (local or service). Ollama-based backends (GLM, DeepSeek) produce text-only OCR output — those tabs will be empty. The API response includes `ocr_supports_bboxes: false` for these backends.
+The Annotated, Overlay, and Bounding Boxes tabs in the UI only populate when using a PaddleOCR-VL backend (local or service). The Ollama-based GLM-OCR backend produces text-only OCR output &mdash; those tabs will be empty. The API response includes `ocr_supports_bboxes: false` for it.
 
 ## Known Limitations
 
-- Ollama OCR backends do not emit native bounding boxes; the Annotated, Overlay, and Bounding Boxes tabs are **empty** for GLM and DeepSeek paths. Use PaddleOCR-VL for bbox artifacts.
+- The Ollama-based GLM-OCR backend does not emit native bounding boxes; the Annotated, Overlay, and Bounding Boxes tabs are **empty** for it. Use PaddleOCR-VL for bbox artifacts.
 - Qdrant retrieval is best-effort. If `QDRANT_URL` is unreachable or `MRN_HMAC_PEPPER` is unset, the retrieval path silently no-ops and `retrieval_enabled` is `false` in the response.
 - pgvector is scaffolded but not wired for live reads or writes. `PgvectorRetrievalStore.is_configured()` returns `False` by default.
 - SQLite history returns the latest prior record per MRN, not a full longitudinal timeline.

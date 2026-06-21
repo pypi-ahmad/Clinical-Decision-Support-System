@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import ollama
@@ -14,7 +15,7 @@ from backend.logging_config import get_logger
 from backend.ocr import OCRBackendError, materialize_annotations, run_ocr
 from backend.pii_scrub import scrub_text
 from backend.retrieval.chunking import sanitize_retrieved_text
-from backend.security import firewall_clause, generate_boundary_nonce, wrap_untrusted
+from backend.security import MAX_PDF_PAGES, firewall_clause, generate_boundary_nonce, wrap_untrusted
 
 
 _logger = get_logger(__name__)
@@ -123,6 +124,32 @@ def run_document_ocr(
     use_gpu: bool = True,
     paddle_service_url: str | None = None,
 ):
+    # Reject pathological PDFs before pdf2image can pin a worker.
+    # The granular graph runs the same check inside _split_pages_node.
+    if Path(file_path).suffix.lower() == ".pdf":
+        try:
+            from pdf2image import pdfinfo_from_path
+
+            info = pdfinfo_from_path(file_path)
+            page_count = int(info.get("Pages", 0) or 0)
+            if page_count > MAX_PDF_PAGES:
+                _logger.warning(
+                    "pdf_rejected_too_many_pages",
+                    pages=page_count,
+                    limit=MAX_PDF_PAGES,
+                )
+                return {
+                    "error": (
+                        f"PDF has {page_count} pages, which exceeds the "
+                        f"{MAX_PDF_PAGES}-page cap (MEDISCAN_MAX_PDF_PAGES)."
+                    )
+                }
+        except Exception as exc:  # pragma: no cover - best-effort guard
+            # If pdfinfo isn't available we fall through to pdf2image's own
+            # error path; the per-page render still gets a chance to fail
+            # gracefully below.
+            _logger.info("pdfinfo_unavailable", reason=str(exc))
+
     try:
         workspace = create_document_workspace(file_path)
         page_image_paths = render_document_pages(file_path, workspace, converter=convert_from_path)
@@ -133,7 +160,7 @@ def run_document_ocr(
     if not page_image_paths:
         return {"error": "Could not process file format."}
 
-    normalized_ocr_backend = (ocr_backend or "ollama").strip().lower()
+    normalized_ocr_backend = (ocr_backend or "glm").strip().lower()
     try:
         ocr_result = run_ocr(
             document_path=file_path,
@@ -149,13 +176,13 @@ def run_document_ocr(
         ocr_result = materialize_annotations(file_path, ocr_result, page_image_paths)
         return ocr_result.model_dump()
     except OCRBackendError as exc:
-        if normalized_ocr_backend in {"ollama", "glm", "glm-ocr", "ollama-glm"}:
-            return {"error": f"Ollama OCR failed: {exc}"}
+        if normalized_ocr_backend in {"glm", "glm-ocr", "ollama", "ollama-glm"}:
+            return {"error": f"GLM-OCR failed: {exc}"}
         return {"error": f"OCR failed: {exc}"}
     except Exception as exc:
         _logger.warning("ocr_failed", reason=str(exc), backend=normalized_ocr_backend)
-        if normalized_ocr_backend in {"ollama", "glm", "glm-ocr", "ollama-glm"}:
-            return {"error": f"Ollama OCR failed: {exc}"}
+        if normalized_ocr_backend in {"glm", "glm-ocr", "ollama", "ollama-glm"}:
+            return {"error": f"GLM-OCR failed: {exc}"}
         return {"error": f"OCR failed: {exc}"}
 
 

@@ -80,12 +80,12 @@ streamlit run frontend/app.py
 
 ## 6. Use the app
 
-1. Choose an OCR backend (GLM-OCR, DeepSeek-OCR, PaddleOCR-VL local, PaddleOCR-VL service). GLM-OCR is selected by default.
+1. Choose an OCR backend (GLM-OCR via Ollama, PaddleOCR-VL local, PaddleOCR-VL service). GLM-OCR is selected by default.
 2. Choose structuring and reasoning models separately.
 3. Select a workflow mode: **Direct pipeline**, **Granular extraction graph** (12-node LangGraph), or **Agentic workflow**.
 4. Upload a medical PDF or image.
 5. Review extracted JSON, bounding boxes, annotated output, and overlays across 4 tabs.
-   > **Note:** The Annotated, Overlay, and Bounding Boxes tabs only populate when using a PaddleOCR-VL backend. Ollama-based backends (GLM, DeepSeek) produce text-only output &mdash; those tabs will be empty.
+   > **Note:** The Annotated, Overlay, and Bounding Boxes tabs only populate when using a PaddleOCR-VL backend. The Ollama-based GLM-OCR backend produces text-only output &mdash; those tabs will be empty.
 6. Save the record if it looks correct.
 7. Optionally upload a policy and run insurance checking with semantic retrieval.
 

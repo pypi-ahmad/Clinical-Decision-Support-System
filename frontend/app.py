@@ -139,12 +139,11 @@ with st.sidebar:
     ocr_backend_option = st.selectbox(
         "OCR Backend",
         [
-            "DeepSeek-OCR (Ollama)",
             "GLM-OCR (Ollama)",
             "PaddleOCR-VL-1.5 (Local Python)",
             "PaddleOCR-VL-1.5 (Local Service)",
         ],
-        index=1,
+        index=0,
     )
     ocr_prompt_mode = st.selectbox(
         "OCR Mode",
@@ -161,12 +160,9 @@ with st.sidebar:
     agentic_mode = workflow_mode == "Agentic workflow"
     extraction_graph_mode = workflow_mode == "Granular extraction graph"
 
-    ocr_backend = "ollama"
-    ocr_model = "deepseek-ocr"
-    if ocr_backend_option == "GLM-OCR (Ollama)":
-        ocr_backend = "glm"
-        ocr_model = "glm-ocr"
-    elif ocr_backend_option == "PaddleOCR-VL-1.5 (Local Python)":
+    ocr_backend = "glm"
+    ocr_model = "glm-ocr"
+    if ocr_backend_option == "PaddleOCR-VL-1.5 (Local Python)":
         ocr_backend = "paddle"
         ocr_model = "PaddlePaddle/PaddleOCR-VL-1.5"
     elif ocr_backend_option == "PaddleOCR-VL-1.5 (Local Service)":

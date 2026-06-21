@@ -236,18 +236,18 @@ def test_analyze_medical_doc_uses_split_structuring_and_reasoning_config(monkeyp
             model="legacy-model",
             api_key="legacy-key",
             structuring_provider="OpenAI",
-            structuring_model="gpt-4o",
+            structuring_model="gpt-5.4",
             structuring_api_key="struct-key",
             reasoning_provider="Anthropic",
-            reasoning_model="claude-3-5-sonnet-20240620",
+            reasoning_model="claude-sonnet-4-6",
             reasoning_api_key="reason-key",
         )
     )
 
     assert result["analysis"]["summary"] == "ok"
     assert pipeline_call["provider"] == "OpenAI"
-    assert pipeline_call["model"] == "gpt-4o"
+    assert pipeline_call["model"] == "gpt-5.4"
     assert pipeline_call["api_key"] == "struct-key"
     assert reasoning_call["provider"] == "Anthropic"
-    assert reasoning_call["model"] == "claude-3-5-sonnet-20240620"
+    assert reasoning_call["model"] == "claude-sonnet-4-6"
     assert reasoning_call["api_key"] == "reason-key"

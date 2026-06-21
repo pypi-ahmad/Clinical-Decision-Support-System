@@ -25,7 +25,7 @@ It is a single FastAPI service backed by:
 | API framework | FastAPI 0.115+ | Async, typed request/response, OpenAPI generation |
 | Workflow engine | LangGraph 0.2+ | Per-node observability, conditional routing, persistent state |
 | OCR (default) | GLM-OCR via Ollama | Local, no per-page cost, prompt-mode flexibility |
-| OCR (alt) | DeepSeek-OCR via Ollama, PaddleOCR-VL (local Python or HTTP service) | Bbox support, language coverage |
+| OCR (alt) | PaddleOCR-VL (local Python or HTTP service) | Bbox support, layout JSON |
 | LLM providers | Ollama, OpenAI, Anthropic, Gemini | Per-stage provider routing (structuring vs reasoning) |
 | Relational store | SQLite (WAL, secure_delete) | Zero-config persistence, audit log, review queue |
 | Vector store | Qdrant (active), pgvector (scaffold) | Semantic retrieval by patient MRN |
@@ -169,7 +169,7 @@ Three backends are supported and chosen per request:
 | Backend | Engine | Bounding boxes | Prompt modes |
 |---|---|---|---|
 | **GLM-OCR** (default) | Ollama | &mdash; | `text`, `ocr`, `table`, `figure`, `chart`, `formula` |
-| **DeepSeek-OCR** | Ollama | &mdash; | `text` |
+| **DeepSeek-OCR** | _removed_ | &mdash; | &mdash; | Replaced by GLM-OCR. |
 | **PaddleOCR-VL** (local) | PaddlePaddle | Yes | &mdash; |
 | **PaddleOCR-VL** (service) | HTTP client (vllm-server) | Yes | &mdash; |
 
@@ -178,7 +178,7 @@ Three backends are supported and chosen per request:
 | Use case | Backend |
 |---|---|
 | Narrative clinical records, low cost, local | GLM-OCR (default) |
-| Same, but a different prompt template is preferred | DeepSeek-OCR |
+| Same, but a different prompt template is preferred | _removed &mdash; GLM-OCR only_ |
 | Tables, figures, bboxes, structured layout JSON | PaddleOCR-VL (local or service) |
 
 ### 4.3 How it works (concepts)
@@ -207,9 +207,9 @@ Three backends are supported and chosen per request:
 - `OCRBackendConfig.normalized_backend` maps `glm` / `ollama` / `paddle` /
   free-form aliases onto the registered backends
   &mdash; `backend/ocr_backends/base.py:64`.
-- GLM-OCR and DeepSeek-OCR share a single `OllamaOCRBackend`; prompt
-  templates are swapped by `config.normalized_backend`
-  &mdash; `backend/ocr_backends/ollama_ocr.py:20-36, 144-148`.
+- GLM-OCR is the only Ollama-backed OCR engine; its prompt templates
+  are selected by `config.ocr_mode` inside a single `OllamaOCRBackend`
+  &mdash; `backend/ocr_backends/ollama_ocr.py:20-27, 144-148`.
 - The `ollama` Python SDK is imported at module level in
   `backend/ocr_backends/ollama_ocr.py:15` and `backend/extract.py:8`.
 - PaddleOCR-VL has a process-wide LRU cache for the local pipeline to avoid
@@ -220,7 +220,7 @@ Three backends are supported and chosen per request:
 
 ### 4.5 Real outputs
 
-- **GLM-OCR / DeepSeek-OCR** &mdash; text-only: `raw_text` and `markdown` are
+- **GLM-OCR** &mdash; text-only: `raw_text` and `markdown` are
   populated, `bounding_boxes` and `confidence` are empty. The UI hides the
   Annotated, Overlay, and Bounding Boxes tabs (`frontend/app.py:276, 294`).
 - **PaddleOCR-VL** &mdash; per-page `bounding_boxes` and aggregated

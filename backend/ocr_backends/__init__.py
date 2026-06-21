@@ -4,7 +4,7 @@ from backend.ocr_backends.paddleocr_vl import PaddleOCRVLBackend
 
 
 def get_ocr_backend(config: OCRBackendConfig):
-    if config.normalized_backend in {"ollama", "glm"}:
+    if config.normalized_backend == "glm":
         return OllamaOCRBackend()
     if config.normalized_backend == "paddle":
         return PaddleOCRVLBackend()

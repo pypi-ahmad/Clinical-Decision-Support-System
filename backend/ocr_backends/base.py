@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field
 
 
 DEFAULT_OCR_MODELS = {
-    "ollama": "deepseek-ocr",
     "glm": "glm-ocr",
     "paddle": "PaddlePaddle/PaddleOCR-VL-1.5",
 }
@@ -63,12 +62,12 @@ class OCRBackendConfig(BaseModel):
 
     @property
     def normalized_backend(self) -> str:
-        normalized = (self.backend or "ollama").strip().lower()
-        if normalized in {"glm", "glm-ocr", "ollama-glm"}:
+        normalized = (self.backend or "glm").strip().lower()
+        if normalized in {"glm", "glm-ocr", "ollama-glm", "ollama"}:
             return "glm"
         if normalized in {"paddle", "paddleocr", "paddleocr-vl", "paddleocr-vl-1.5"}:
             return "paddle"
-        return "ollama"
+        return "glm"
 
     @property
     def resolved_model(self) -> str:

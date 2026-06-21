@@ -26,15 +26,6 @@ GLM_PROMPTS = {
     "formula": "Formula Recognition:",
 }
 
-DEEPSEEK_PROMPTS = {
-    "text": "Transcribe this medical document text exactly.",
-    "ocr": "Transcribe this medical document text exactly.",
-    "table": "Extract the table contents from this medical document exactly.",
-    "figure": "Describe the figure or chart contents from this medical document exactly.",
-    "chart": "Describe the figure or chart contents from this medical document exactly.",
-    "formula": "Extract the formula or structured notation from this document exactly.",
-}
-
 
 def _concurrency() -> int:
     try:
@@ -92,7 +83,7 @@ class OllamaOCRBackend(BaseOCRBackend):
                 )
 
         return aggregate_page_results(
-            backend="glm" if config.normalized_backend == "glm" else "ollama",
+            backend=config.normalized_backend,
             model=config.resolved_model,
             ocr_mode=config.ocr_mode,
             page_results=page_results,
@@ -143,6 +134,4 @@ async def _run_pages_async(
 
 def _build_prompt(config: OCRBackendConfig) -> str:
     prompt_key = (config.ocr_mode or "text").strip().lower()
-    if config.normalized_backend == "glm":
-        return GLM_PROMPTS.get(prompt_key, GLM_PROMPTS["text"])
-    return DEEPSEEK_PROMPTS.get(prompt_key, DEEPSEEK_PROMPTS["text"])
+    return GLM_PROMPTS.get(prompt_key, GLM_PROMPTS["text"])

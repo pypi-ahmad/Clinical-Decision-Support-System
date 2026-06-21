@@ -39,7 +39,7 @@ the vector store is hard-coded into the request handlers.
 | Clinicians need to compare today's record against prior encounters | SQLite + Qdrant retrieval give the reasoning LLM structured history and semantic context by patient MRN. |
 | Insurance eligibility is a separate workflow | `/check_insurance` ingests a policy (TXT or PDF), chunks it, and reasons over extracted diagnoses with explainable verdicts. |
 | PHI must never leak to logs or external services | Structlog redacts sensitive keys + provider tokens; HMAC-peppered MRN hashing replaces raw identifiers; a prompt firewall wraps every untrusted document section in nonce-delimited blocks. |
-| Multiple OCR engines are needed for different document types | GLM-OCR (default, Ollama), DeepSeek-OCR, and PaddleOCR-VL (local Python or HTTP service) are hot-swappable per request. |
+| Multiple OCR engines are needed for different document types | GLM-OCR (default, Ollama) and PaddleOCR-VL (local Python or HTTP service) are hot-swappable per request. |
 | Reasoning quality should be reproducible | Capture-and-embed lineage (git SHA, library versions, OCR/LLM identifiers) on every record and audit event. |
 
 ## How it works
@@ -60,7 +60,7 @@ flowchart TB
 
     subgraph Processing
         direction TB
-        OCR[OCR Backends<br/>GLM-OCR &middot; DeepSeek &middot; PaddleOCR-VL]
+        OCR[OCR Backends<br/>GLM-OCR &middot; PaddleOCR-VL]
         STRUCT[Structuring LLM]
         REASON[Reasoning LLM]
         ART[Artifact Engine<br/>BBox &middot; Annotated PDF &middot; Overlays]
@@ -108,7 +108,7 @@ focused references, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
 │   ├── ocr.py                      # Thin OCR dispatch layer
 │   ├── ocr_backends/
 │   │   ├── base.py                 # OCRResult, OCRPageResult, OCRBoundingBox, abstract backend
-│   │   ├── ollama_ocr.py           # GLM-OCR and DeepSeek prompt templates, multi-page loop
+│   │   ├── ollama_ocr.py           # GLM-OCR prompt templates, multi-page loop
 │   │   ├── paddleocr_vl.py         # PaddleOCR-VL local Python + service modes
 │   │   └── service_client.py       # HTTP client with healthcheck and timeout
 │   ├── workflows/
@@ -215,7 +215,6 @@ All backends produce a unified `OCRResult` with per-page text, optional markdown
 | Backend | Engine | Bounding Boxes | Prompt Modes | Default |
 |---|---|---|---|---|
 | **GLM-OCR** | Ollama | &mdash; | text &middot; table &middot; figure &middot; formula &middot; chart | **Yes** |
-| DeepSeek-OCR | Ollama | &mdash; | text | &mdash; |
 | PaddleOCR-VL (local) | PaddlePaddle | Yes | &mdash; | &mdash; |
 | PaddleOCR-VL (service) | HTTP client | Yes | &mdash; | &mdash; |
 
@@ -367,7 +366,7 @@ Environment variables grouped by concern. Defaults are shown where the code supp
 
 ## Known Limitations
 
-- **Bounding boxes** &mdash; Ollama-based OCR backends (GLM, DeepSeek) do not emit native bounding boxes. The Annotated, Overlay, and Bounding Boxes tabs in the UI are **empty** for these backends. Bounding box artifacts require PaddleOCR-VL (local or service mode).
+- **Bounding boxes** &mdash; The Ollama-based OCR backend (GLM-OCR) does not emit native bounding boxes. The Annotated, Overlay, and Bounding Boxes tabs in the UI are **empty** for it. Bounding box artifacts require PaddleOCR-VL (local or service mode).
 - **Semantic retrieval** &mdash; Qdrant retrieval is best-effort: if `QDRANT_URL` is unreachable or `MRN_HMAC_PEPPER` is unset, the retrieval path silently no-ops and contributes zero context. The API response includes `retrieval_enabled: false` when inactive.
 - **pgvector** &mdash; Scaffolded but not live. `PgvectorRetrievalStore.is_configured()` returns `False` by default. Qdrant is the only actively exercised retrieval backend.
 - **Patient history** &mdash; SQLite returns the latest prior record per MRN, not a full longitudinal timeline.

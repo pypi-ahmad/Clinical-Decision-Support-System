@@ -39,7 +39,7 @@ def run_ocr(
     )
     try:
         backend_impl = get_ocr_backend(config)
-        if config.normalized_backend in {"ollama", "glm"} and ollama_client is not None:
+        if config.normalized_backend == "glm" and ollama_client is not None:
             backend_impl = OllamaOCRBackend(ollama_client=ollama_client)
         return backend_impl.run(document_path, page_image_paths, config, artifact_root=artifact_root)
     except Exception as exc:
