@@ -14,6 +14,7 @@ without fixtures. Run explicitly with::
 
     pytest -m eval
 """
+
 from __future__ import annotations
 
 import json
@@ -43,10 +44,12 @@ def _load_gold() -> list[tuple[str, dict]]:
 _GOLD = _load_gold()
 
 if not _GOLD:
+
     @pytest.mark.eval
     def test_eval_harness_requires_gold():
         pytest.skip("No gold fixtures in tests/eval/gold/ — add JSON fixtures to enable.")
 else:
+
     @pytest.mark.parametrize("name,case", _GOLD, ids=[n for n, _ in _GOLD])
     def test_ocr_cer(name: str, case: dict) -> None:
         cer = char_error_rate(case.get("reference_text", ""), case.get("hypothesis_text", ""))

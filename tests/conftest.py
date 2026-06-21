@@ -16,7 +16,6 @@ import os
 
 import pytest
 
-
 os.environ.setdefault("MEDISCAN_ALLOW_ANONYMOUS", "1")
 os.environ.setdefault("MRN_HMAC_PEPPER", "test-pepper-not-for-production")
 os.environ.setdefault("MEDISCAN_LLM_RETRIES", "1")

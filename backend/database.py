@@ -88,9 +88,7 @@ def init_db() -> None:
         existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(records)").fetchall()}
         if "lineage" not in existing_cols:
             conn.execute("ALTER TABLE records ADD COLUMN lineage TEXT")
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_records_mrn_date ON records (mrn, date DESC)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_records_mrn_date ON records (mrn, date DESC)")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS audit_events (
@@ -122,9 +120,7 @@ def init_db() -> None:
             )
             """
         )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_review_tasks_status ON review_tasks (status, created_at DESC)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_review_tasks_status ON review_tasks (status, created_at DESC)")
 
 
 def _sanitize_mrn(raw: Any) -> str:

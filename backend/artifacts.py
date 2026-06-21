@@ -8,13 +8,12 @@ functions return paths rooted under ``UPLOAD_ROOT``.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
 
 from pdf2image import convert_from_path
 from PIL import Image, ImageDraw
-
 
 # Cap Pillow's decompression heuristic as a defence-in-depth against crafted
 # images with millions of pixels. ``None`` disables Pillow's internal guard.
@@ -86,9 +85,7 @@ def _assert_within_root(path: Path) -> Path:
     try:
         resolved.relative_to(root)
     except ValueError as exc:
-        raise ValueError(
-            f"Path {resolved} escapes UPLOAD_ROOT={root}"
-        ) from exc
+        raise ValueError(f"Path {resolved} escapes UPLOAD_ROOT={root}") from exc
     return resolved
 
 
@@ -135,7 +132,9 @@ def render_document_pages(
     source_path = Path(file_path)
     if source_path.suffix.lower() == ".pdf":
         effective_dpi = int(dpi or os.environ.get("MEDISCAN_RENDER_DPI", 150))
-        images = converter(file_path, dpi=effective_dpi) if "dpi" in converter.__code__.co_varnames else converter(file_path)
+        images = (
+            converter(file_path, dpi=effective_dpi) if "dpi" in converter.__code__.co_varnames else converter(file_path)
+        )
         page_paths: list[str] = []
         for page_index, image in enumerate(images, start=1):
             page_path = Path(workspace.page_images_dir) / f"page_{page_index:04d}.png"

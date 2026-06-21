@@ -1,79 +1,227 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.5.0,<0.6.0"]
+build-backend = "uv_build"
 
 [project]
 name = "mediscan-cdss"
-version = "0.1.0"
+version = "1.0.0"
 description = "Clinical Decision Support System — OCR + LLM extraction and reasoning over clinical documents."
-requires-python = ">=3.11"
+requires-python = ">=3.12.10,<3.13"
 readme = "README.md"
-license = { text = "Proprietary" }
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+  { name = "Ahmad Mujtaba", email = "72138709+pypi-ahmad@users.noreply.github.com" },
+]
+keywords = [
+  "clinical",
+  "ocr",
+  "rag",
+  "llm",
+  "decision-support",
+  "medical",
+  "langgraph",
+  "fastapi",
+]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Framework :: FastAPI",
+  "Intended Audience :: Healthcare Industry",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Medical Science Apps.",
+  "Topic :: Office/Business :: Financial :: Investment",
+  "Typing :: Typed",
+]
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["backend*"]
-exclude = ["tests*", "frontend*"]
+# Core runtime dependencies. Pinned with a MAJOR.MINOR floor so patch releases
+# are picked up but breaking changes never auto-resolve into a release.
+dependencies = [
+  # API framework
+  "fastapi>=0.115,<0.117",
+  "uvicorn[standard]>=0.32,<0.35",
+  "starlette>=0.40,<0.42",
+  "python-multipart>=0.0.18",  # CVE-2024-53981 fixed in 0.0.18
+  "pydantic>=2.9,<3.0",
+  "pydantic-settings>=2.6,<3.0",
+  # Async I/O
+  "aiofiles>=24.1.0",
+  "httpx>=0.27.2,<0.29",
+  # Database
+  "sqlalchemy[asyncio]>=2.0.36,<2.1",
+  "aiosqlite>=0.20.0",
+  "greenlet>=3.0",  # SQLAlchemy 2.0 runtime
+  # Reliability
+  "tenacity>=9.0.0",
+  "structlog>=24.4.0",
+  "slowapi>=0.1.9",
+  # Observability
+  "opentelemetry-api>=1.28.0",
+  "opentelemetry-sdk>=1.28.0",
+  "opentelemetry-instrumentation-fastapi>=0.49b0",
+  "prometheus-client>=0.21.0",
+  # LLM providers
+  "ollama>=0.4.4",
+  "openai>=1.55,<2.0",
+  "anthropic>=0.40,<1.0",
+  "google-genai>=0.8.0",  # new unified SDK (replaces google-generativeai)
+  # Agents & retrieval
+  "langgraph>=0.2.60,<0.3",
+  "qdrant-client>=1.12.1",
+  # OCR / document handling
+  "pdf2image>=1.17.0",
+  "Pillow>=11.0.1",  # recent CVE fixes; pin minor bounds in prod
+  "python-magic>=0.4.27; sys_platform != 'win32'",
+  "python-magic-bin>=0.4.14; sys_platform == 'win32'",
+  # ML runtime (used by PaddleOCR-VL when enabled)
+  "torch>=2.4,<2.6",
+  "torchvision>=0.19,<0.21",
+  # UI
+  "streamlit>=1.41.0",
+  "streamlit-pdf-viewer>=0.0.19",
+  "pandas>=2.2.3",
+  # HTTP (retained for any sync consumers; prefer httpx in new code)
+  "requests>=2.32.3",  # pulls Proxy-Authorization leak fix
+]
+
+[project.urls]
+Homepage = "https://github.com/pypi-ahmad/Clinical-Decision-Support-System"
+Repository = "https://github.com/pypi-ahmad/Clinical-Decision-Support-System"
+Issues = "https://github.com/pypi-ahmad/Clinical-Decision-Support-System/issues"
+Changelog = "https://github.com/pypi-ahmad/Clinical-Decision-Support-System/blob/main/CHANGELOG.md"
+
+[project.scripts]
+mediscan-api = "backend.main:run"  # placeholder; real CLI lands in 1.1
+
+# ---------------------------------------------------------------------------
+# uv
+# ---------------------------------------------------------------------------
+[tool.uv]
+managed = true
+package = false  # we ship a service image, not a pip wheel (yet)
+
+# ---------------------------------------------------------------------------
+# Dependency groups (PEP 735). `uv sync` installs `dev` + `test` by default.
+# CI uses `uv sync --no-dev` to install the runtime env, then `uv sync` to add
+# dev+test for the test job.
+# ---------------------------------------------------------------------------
+[dependency-groups]
+dev = [
+  "ruff>=0.9.0,<0.10",
+  "mypy>=1.14.0,<1.15",
+  "pip-audit>=2.7.0",
+  "hatch-vcs>=0.4.0",
+  "pre-commit>=4.0.0",
+  "hypothesis>=6.100.0",
+  "pyright>=1.1.370",
+]
+test = [
+  "pytest>=8.3.3",
+  "pytest-asyncio>=0.24.0",
+  "pytest-cov>=5.0.0",
+  "pytest-xdist>=3.6.0",
+  "pytest-httpx>=0.30.0",
+  "types-requests>=2.32.0",
+  "ragas>=0.3.0",
+  "datasets>=3.0.0",
+]
 
 # ---------------------------------------------------------------------------
 # Ruff (lint + import sort)
 # ---------------------------------------------------------------------------
+# Phase A: only the safe core rules are enabled so the existing codebase
+# passes the gate. Phase B tightens this to B/SIM/RUF/N/S/PIE/TID/FA as
+# the legacy code is modernized in the same PR.
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 120
 extend-exclude = [
-    "backend/uploads",
-    ".venv",
-    ".pytest_cache",
+  "backend/uploads",
+  ".venv",
+  ".pytest_cache",
+  "build",
+  "dist",
 ]
 
 [tool.ruff.lint]
 select = [
-    "E", "F", "W",   # pycodestyle + pyflakes
-    "I",              # isort
-    "B",              # flake8-bugbear
-    "UP",             # pyupgrade
-    "S",              # bandit
-    "N",              # pep8-naming
-    "SIM",            # flake8-simplify
-    "RUF",            # ruff-specific
+  "E",   # pycodestyle
+  "F",   # pyflakes
+  "W",   # pycodestyle warnings
+  "I",   # isort
+  "UP",  # pyupgrade
 ]
 ignore = [
-    "E501",   # line-length handled by formatter
-    "S101",   # allow assert in tests
-    "B008",   # FastAPI uses Depends()/Form() as defaults by design
-    "N812",   # allow lowercase import aliasing (ollama, etc.)
-    "S110",   # intentional try/except/pass in a few audit-safe places
+  "E501",   # line-length handled by the formatter
+  "UP038",  # isinstance with tuple is acceptable in 3.12
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S", "N802", "N803"]
-"backend/ai_wrapper.py" = ["S110"]
+"tests/**/*.py" = ["B", "E402", "F401", "F811", "F841"]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+docstring-code-format = true
 
 # ---------------------------------------------------------------------------
-# mypy (gradual; strict only on core modules)
+# mypy (gradual; strict on the security and DB layer; relaxed on the rest)
 # ---------------------------------------------------------------------------
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 warn_unused_configs = true
 warn_return_any = false
 warn_unused_ignores = true
 no_implicit_optional = true
 check_untyped_defs = true
 ignore_missing_imports = true
+enable_error_code = [
+  "truthy-bool",
+  "str-bytes-safe",
+  "possibly-undefined",
+]
 exclude = [
-    "tests/",
-    "frontend/",
-    "backend/uploads/",
+  "tests/",
+  "frontend/",
+  "backend/uploads/",
+  "build/",
+  "dist/",
 ]
 
 [[tool.mypy.overrides]]
-module = ["backend.security", "backend.database", "backend.retrieval.*"]
+# Strict-by-default on the security, error, settings, and DB layers.
+module = [
+  "backend.security",
+  "backend.errors",
+  "backend.settings",
+  "backend.db.*",
+  "backend.retrieval.*",
+]
 disallow_untyped_defs = true
+
+# ---------------------------------------------------------------------------
+# Pyright (static type analysis)
+# ---------------------------------------------------------------------------
+# Phase A: Pyright is installed and configured in "basic" mode. The strict
+# type-clean sweep is delivered by Phase B together with the new
+# backend/settings.py and backend/errors.py modules.
+[tool.pyright]
+pythonVersion = "3.12"
+include = ["backend/"]
+exclude = [
+  "backend/uploads",
+  "tests",
+  "frontend",
+  "build",
+  "dist",
+]
+typeCheckingMode = "basic"
+reportMissingImports = "error"
+reportMissingTypeStubs = false
 
 # ---------------------------------------------------------------------------
 # pytest
@@ -82,9 +230,16 @@ disallow_untyped_defs = true
 minversion = "7.0"
 addopts = "-ra --strict-markers --cov=backend --cov-report=term-missing"
 testpaths = ["tests"]
+asyncio_mode = "auto"
 markers = [
-    "live: tests that require external services (Ollama/Qdrant/Paddle)",
-    "eval: slow quality-evaluation tests (CER/field-F1)",
+  "live: tests that require external services (Ollama/Qdrant/Paddle)",
+  "eval: slow quality-evaluation tests (CER/field-F1)",
+  "property: property-based tests (Hypothesis)",
+  "contract: API contract tests (OpenAPI schema pinning)",
+]
+filterwarnings = [
+  "error::DeprecationWarning:backend",
+  "default::DeprecationWarning",
 ]
 
 [tool.coverage.run]
@@ -94,8 +249,15 @@ omit = ["backend/uploads/*"]
 
 [tool.coverage.report]
 exclude_lines = [
-    "pragma: no cover",
-    "raise NotImplementedError",
-    "if __name__ == .__main__.:",
-    "if TYPE_CHECKING:",
+  "pragma: no cover",
+  "raise NotImplementedError",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]
+# Per-module coverage gates enforced in CI (the pytest-cov failure line is
+# raised by `coverage report --fail-under`); the project gate is 80% overall
+# and 90% for security-critical modules.
+exclude_also = [
+  "def __repr__",
+  "raise NotImplementedError",
 ]

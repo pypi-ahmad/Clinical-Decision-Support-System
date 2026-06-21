@@ -8,6 +8,7 @@ Run explicitly::
 
     python -m pytest tests/integration/test_live_pipeline.py -v
 """
+
 from __future__ import annotations
 
 import os
@@ -92,10 +93,12 @@ def sample_image(tmp_path: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def test_live_ocr_produces_raw_text(sample_image: Path):
+def test_live_ocr_produces_raw_text(sample_image: Path, monkeypatch: pytest.MonkeyPatch):
     """Run real Ollama OCR on an image and verify we get text back."""
     _require_ollama_model("glm-ocr")
     from backend.extract import run_document_ocr
+
+    monkeypatch.setenv("MEDISCAN_UPLOAD_ROOT", str(sample_image.parent))
 
     payload = run_document_ocr(
         str(sample_image),
@@ -111,11 +114,13 @@ def test_live_ocr_produces_raw_text(sample_image: Path):
     assert len(raw) > 0, "OCR returned empty text"
 
 
-def test_live_structuring_returns_valid_json(sample_image: Path):
+def test_live_structuring_returns_valid_json(sample_image: Path, monkeypatch: pytest.MonkeyPatch):
     """Run real OCR + structuring and verify the result parses as JSON."""
     _require_ollama_model("glm-ocr")
     _require_ollama_model("glm-4.7-flash")
     from backend.extract import process_document_pipeline
+
+    monkeypatch.setenv("MEDISCAN_UPLOAD_ROOT", str(sample_image.parent))
 
     result = process_document_pipeline(
         str(sample_image),
@@ -136,12 +141,14 @@ def test_live_structuring_returns_valid_json(sample_image: Path):
     )
 
 
-def test_live_reasoning_produces_analysis(sample_image: Path):
+def test_live_reasoning_produces_analysis(sample_image: Path, monkeypatch: pytest.MonkeyPatch):
     """Run real OCR + structuring + reasoning and verify analysis output."""
     _require_ollama_model("glm-ocr")
     _require_ollama_model("glm-4.7-flash")
     from backend.extract import process_document_pipeline
     from backend.logic import analyze_medical_logic
+
+    monkeypatch.setenv("MEDISCAN_UPLOAD_ROOT", str(sample_image.parent))
 
     result = process_document_pipeline(
         str(sample_image),
@@ -299,7 +306,7 @@ def test_live_qdrant_index_and_retrieve():
 
 
 @pytest.mark.skipif(not _ollama_available, reason="Ollama server not reachable")
-def test_live_multipage_pdf(tmp_path: Path):
+def test_live_multipage_pdf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Process a synthetically constructed 2-page PDF through the full pipeline."""
     _require_ollama_model("glm-ocr")
     _require_ollama_model("glm-4.7-flash")
@@ -309,6 +316,7 @@ def test_live_multipage_pdf(tmp_path: Path):
     except ImportError:
         pytest.skip("reportlab not installed — needed for multi-page PDF generation")
 
+    monkeypatch.setenv("MEDISCAN_UPLOAD_ROOT", str(tmp_path))
     pdf_path = tmp_path / "multipage.pdf"
     c = canvas.Canvas(str(pdf_path), pagesize=letter)
     c.drawString(72, 700, "Patient: Bob Test  MRN: MRN-MP-1  DOB: 1990-01-01")

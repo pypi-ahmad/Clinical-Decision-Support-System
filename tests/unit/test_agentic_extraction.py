@@ -3,12 +3,12 @@ Tests for backend/workflows/agentic_extraction.py
 
 Covers each agentic graph node in isolation plus a compiled-graph invocation.
 """
+
 from __future__ import annotations
 
 import pytest
 
 import backend.workflows.agentic_extraction as ae
-
 
 # ---------------------------------------------------------------------------
 # Node-level unit tests

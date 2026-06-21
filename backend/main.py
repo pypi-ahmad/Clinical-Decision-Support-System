@@ -42,8 +42,8 @@ from backend.artifacts import ensure_upload_root
 from backend.database import init_db, record_audit_event, save_record
 from backend.extract import process_document_pipeline, run_document_ocr
 from backend.lineage import capture_lineage
-from backend.logic import analyze_medical_logic, check_insurance_coverage
 from backend.logging_config import configure_logging, get_logger
+from backend.logic import analyze_medical_logic, check_insurance_coverage
 from backend.models import MedicalRecord, MedicalRecordStrict
 from backend.retrieval import (
     build_chunks_from_ocr_payload,
@@ -53,7 +53,6 @@ from backend.retrieval import (
 )
 from backend.retrieval.chunking import sanitize_retrieved_text
 from backend.security import (
-    MAX_UPLOAD_BYTES,
     require_api_key,
     resolve_artifact_path,
     sanitize_filename,
@@ -63,7 +62,6 @@ from backend.security import (
 )
 from backend.workflows.agentic_extraction import run_agentic_extraction_workflow
 from backend.workflows.extraction_graph import run_extraction_graph
-
 
 configure_logging()
 logger = get_logger(__name__)
@@ -88,8 +86,8 @@ async def _lifespan(app: FastAPI):
         )
     # Warm up expensive singletons so the first request doesn't pay cold start.
     try:
-        from backend.workflows.extraction_graph import _get_compiled_graph as _get_granular
         from backend.workflows.agentic_extraction import _get_compiled_graph as _get_agentic
+        from backend.workflows.extraction_graph import _get_compiled_graph as _get_granular
 
         _get_granular()
         _get_agentic()
@@ -507,9 +505,7 @@ async def check_insurance(
         allowed_suffixes=frozenset({".pdf", ".png", ".jpg", ".jpeg", ".txt"}),
     )
     try:
-        policy_path, _ = await _save_upload(
-            policy_file, policy_file.content_type or "application/octet-stream"
-        )
+        policy_path, _ = await _save_upload(policy_file, policy_file.content_type or "application/octet-stream")
     except HTTPException:
         raise
     except Exception as exc:
@@ -688,9 +684,7 @@ async def approve_review(task_id: int, payload: dict[str, Any] | None = None) ->
 
     reviewer = (payload or {}).get("reviewer") if isinstance(payload, dict) else None
     notes = (payload or {}).get("notes") if isinstance(payload, dict) else None
-    updated = await run_in_threadpool(
-        resolve_review_task, task_id, approve=True, reviewer=reviewer, notes=notes
-    )
+    updated = await run_in_threadpool(resolve_review_task, task_id, approve=True, reviewer=reviewer, notes=notes)
     if not updated:
         raise HTTPException(status_code=404, detail="Review task not found or already resolved")
     return {"status": "approved", "task_id": task_id}
@@ -702,9 +696,7 @@ async def reject_review(task_id: int, payload: dict[str, Any] | None = None) -> 
 
     reviewer = (payload or {}).get("reviewer") if isinstance(payload, dict) else None
     notes = (payload or {}).get("notes") if isinstance(payload, dict) else None
-    updated = await run_in_threadpool(
-        resolve_review_task, task_id, approve=False, reviewer=reviewer, notes=notes
-    )
+    updated = await run_in_threadpool(resolve_review_task, task_id, approve=False, reviewer=reviewer, notes=notes)
     if not updated:
         raise HTTPException(status_code=404, detail="Review task not found or already resolved")
     return {"status": "rejected", "task_id": task_id}
@@ -786,9 +778,7 @@ def _retrieve_patient_context(current_data: dict, ocr_payload: dict) -> list[dic
         return []
 
     return [
-        {**hit, "text": sanitize_retrieved_text(str(hit.get("text", "")))}
-        if isinstance(hit, dict)
-        else hit
+        {**hit, "text": sanitize_retrieved_text(str(hit.get("text", "")))} if isinstance(hit, dict) else hit
         for hit in results
     ]
 
@@ -820,9 +810,7 @@ def _retrieve_policy_context(medical_data: dict, policy_text: str, policy_docume
         return []
 
     return [
-        {**hit, "text": sanitize_retrieved_text(str(hit.get("text", "")))}
-        if isinstance(hit, dict)
-        else hit
+        {**hit, "text": sanitize_retrieved_text(str(hit.get("text", "")))} if isinstance(hit, dict) else hit
         for hit in results
     ]
 

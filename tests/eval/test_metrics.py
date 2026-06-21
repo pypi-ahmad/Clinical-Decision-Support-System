@@ -4,6 +4,7 @@ A quality harness that reports wrong scores is worse than none, so we pin
 the metric math with hand-checked cases. These tests run by default and are
 not gated on the ``eval`` marker.
 """
+
 from __future__ import annotations
 
 import math
@@ -16,7 +17,6 @@ from tests.eval.metrics import (
     field_set_f1,
     word_error_rate,
 )
-
 
 # ---------------------------------------------------------------------------
 # char_error_rate

@@ -16,7 +16,6 @@ import ollama
 
 from backend.ocr_backends.base import BaseOCRBackend, OCRBackendConfig, OCRPageResult, aggregate_page_results
 
-
 GLM_PROMPTS = {
     "text": "Text Recognition:",
     "ocr": "Text Recognition:",
@@ -125,10 +124,7 @@ async def _run_pages_async(
                 markdown=page_text,
             )
 
-    tasks = [
-        _page(idx, path)
-        for idx, path in enumerate(page_image_paths, start=1)
-    ]
+    tasks = [_page(idx, path) for idx, path in enumerate(page_image_paths, start=1)]
     return list(await asyncio.gather(*tasks))
 
 

@@ -20,7 +20,6 @@ from backend.logging_config import get_logger
 from backend.retrieval.embeddings import embed_texts
 from backend.retrieval.vector_store import RetrievalChunk, VectorStoreBackend
 
-
 _logger = get_logger(__name__)
 
 

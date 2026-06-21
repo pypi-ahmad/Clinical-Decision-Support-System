@@ -171,7 +171,7 @@ def _get_openai_client(api_key: str | None, timeout: int) -> OpenAI:
 
 
 @lru_cache(maxsize=8)
-def _get_anthropic_client(api_key: str | None, timeout: int) -> "anthropic.Anthropic":
+def _get_anthropic_client(api_key: str | None, timeout: int) -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=api_key, timeout=timeout)
 
 
@@ -271,9 +271,8 @@ def _call_anthropic(
     augmented_system = system_prompt
     if force_json:
         augmented_system = (
-            system_prompt
-            + "\n\nOUTPUT CONSTRAINT: Reply with a single JSON object only. "
-              "Do not include markdown fences, commentary or explanations."
+            system_prompt + "\n\nOUTPUT CONSTRAINT: Reply with a single JSON object only. "
+            "Do not include markdown fences, commentary or explanations."
         )
     response = client.messages.create(
         model=model,

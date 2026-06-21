@@ -13,9 +13,10 @@ handful of scores the audit called for:
 Metrics are returned as plain floats in ``[0.0, 1.0]``. Callers decide
 pass/fail thresholds; this module never raises.
 """
+
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 
 def _levenshtein(ref: str, hyp: str) -> int:
@@ -31,8 +32,8 @@ def _levenshtein(ref: str, hyp: str) -> int:
         curr = [i] + [0] * len(hyp)
         for j, hc in enumerate(hyp, 1):
             curr[j] = min(
-                prev[j] + 1,               # deletion
-                curr[j - 1] + 1,           # insertion
+                prev[j] + 1,  # deletion
+                curr[j - 1] + 1,  # insertion
                 prev[j - 1] + (rc != hc),  # substitution
             )
         prev = curr

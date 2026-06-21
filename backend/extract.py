@@ -17,12 +17,10 @@ from backend.pii_scrub import scrub_text
 from backend.retrieval.chunking import sanitize_retrieved_text
 from backend.security import MAX_PDF_PAGES, firewall_clause, generate_boundary_nonce, wrap_untrusted
 
-
 _logger = get_logger(__name__)
 
 
-_STRUCTURING_SCHEMA_DOC = (
-    """{
+_STRUCTURING_SCHEMA_DOC = """{
   "patient": {"full_name": "string", "dob": "YYYY-MM-DD", "mrn": "string"},
   "encounter": {"date": "YYYY-MM-DD", "provider": "string", "facility": "string"},
   "clinical": {
@@ -31,7 +29,6 @@ _STRUCTURING_SCHEMA_DOC = (
     "vitals": {"bp": "string", "hr": "string", "temp": "string", "weight": "string"}
   }
 }"""
-)
 
 
 def _build_structuring_system_prompt(nonce: str) -> str:
@@ -68,9 +65,7 @@ def process_document_pipeline(
     """
     resolved_structuring_provider = structuring_provider or provider
     resolved_structuring_model = structuring_model or model
-    resolved_structuring_api_key = (
-        structuring_api_key if structuring_api_key is not None else api_key
-    )
+    resolved_structuring_api_key = structuring_api_key if structuring_api_key is not None else api_key
 
     _logger.info("ocr_scanning", backend=ocr_backend, model=ocr_model)
     ocr_payload = run_document_ocr(
@@ -93,9 +88,7 @@ def process_document_pipeline(
         model=resolved_structuring_model,
     )
     try:
-        user_text, nonce = _build_structuring_user_input(
-            ocr_payload, provider=resolved_structuring_provider
-        )
+        user_text, nonce = _build_structuring_user_input(ocr_payload, provider=resolved_structuring_provider)
         raw_response = get_ai_response(
             resolved_structuring_provider,
             resolved_structuring_model,
@@ -186,9 +179,7 @@ def run_document_ocr(
         return {"error": f"OCR failed: {exc}"}
 
 
-def _build_structuring_user_input(
-    ocr_payload: dict[str, Any], *, provider: str | None = None
-) -> tuple[str, str]:
+def _build_structuring_user_input(ocr_payload: dict[str, Any], *, provider: str | None = None) -> tuple[str, str]:
     """Compose the user turn with prompt-injection-resistant delimiters.
 
     Returns ``(user_text, nonce)`` — the nonce MUST be passed to the matching

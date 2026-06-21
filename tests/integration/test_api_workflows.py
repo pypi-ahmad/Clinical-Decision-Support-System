@@ -5,7 +5,6 @@ from fastapi.testclient import TestClient
 
 import backend.main as main
 
-
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -323,6 +322,7 @@ def test_confirm_endpoint_calls_save_record(monkeypatch):
 # Paddle service URL: SSRF hardening
 # ---------------------------------------------------------------------------
 
+
 def test_analyze_ignores_client_paddle_service_url(monkeypatch, upload_root):
     """A client-supplied ``paddle_service_url`` form field must NOT reach the
     pipeline. The handler resolves the Paddle URL exclusively from
@@ -339,7 +339,8 @@ def test_analyze_ignores_client_paddle_service_url(monkeypatch, upload_root):
     monkeypatch.setattr(main, "_load_history", lambda mrn: None)
     monkeypatch.setattr(main, "create_vector_store", lambda: None)
     monkeypatch.setattr(
-        main, "analyze_medical_logic",
+        main,
+        "analyze_medical_logic",
         lambda *a, **kw: {"summary": "ok", "alerts": [], "trends": []},
     )
 
@@ -373,7 +374,8 @@ def test_analyze_uses_env_paddle_service_url(monkeypatch, upload_root):
     monkeypatch.setattr(main, "_load_history", lambda mrn: None)
     monkeypatch.setattr(main, "create_vector_store", lambda: None)
     monkeypatch.setattr(
-        main, "analyze_medical_logic",
+        main,
+        "analyze_medical_logic",
         lambda *a, **kw: {"summary": "ok", "alerts": [], "trends": []},
     )
 
@@ -580,9 +582,7 @@ def test_artifacts_serves_file_with_valid_key(monkeypatch, upload_root):
     target = upload_root / "report.pdf"
     target.write_bytes(b"%PDF-1.4\nreal-bytes\n")
     client = _auth_client(monkeypatch, "s3cret-test-key")
-    response = client.get(
-        "/artifacts/report.pdf", headers={"X-API-Key": "s3cret-test-key"}
-    )
+    response = client.get("/artifacts/report.pdf", headers={"X-API-Key": "s3cret-test-key"})
     assert response.status_code == 200
     assert response.content == b"%PDF-1.4\nreal-bytes\n"
 

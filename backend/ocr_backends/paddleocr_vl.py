@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import json
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,6 @@ from backend.ocr_backends.service_client import (
     PaddleOCRVLServiceError,
     PaddleOCRVLServiceSettings,
 )
-
 
 try:
     from paddleocr import PaddleOCRVL

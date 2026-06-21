@@ -6,7 +6,6 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-
 DEFAULT_OCR_MODELS = {
     "glm": "glm-ocr",
     "paddle": "PaddlePaddle/PaddleOCR-VL-1.5",

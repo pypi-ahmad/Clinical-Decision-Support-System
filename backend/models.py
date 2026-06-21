@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import re
 from datetime import date
-from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -45,9 +44,9 @@ class Medication(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    name: Optional[str] = None
-    dosage: Optional[str] = None
-    frequency: Optional[str] = None
+    name: str | None = None
+    dosage: str | None = None
+    frequency: str | None = None
 
     @field_validator("name", "dosage", "frequency", mode="before")
     @classmethod
@@ -60,10 +59,10 @@ class Medication(BaseModel):
 class Vitals(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    bp: Optional[str] = None
-    hr: Optional[str] = None
-    temp: Optional[str] = None
-    weight: Optional[str] = None
+    bp: str | None = None
+    hr: str | None = None
+    temp: str | None = None
+    weight: str | None = None
 
     @field_validator("bp", "hr", "temp", "weight", mode="before")
     @classmethod
@@ -76,9 +75,9 @@ class Vitals(BaseModel):
 class Encounter(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    date: Optional[str] = None
-    provider: Optional[str] = None
-    facility: Optional[str] = None
+    date: str | None = None
+    provider: str | None = None
+    facility: str | None = None
 
     @field_validator("provider", "facility", mode="before")
     @classmethod
@@ -106,9 +105,9 @@ class Encounter(BaseModel):
 class Patient(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    full_name: Optional[str] = None
-    dob: Optional[str] = None
-    mrn: Optional[str] = None
+    full_name: str | None = None
+    dob: str | None = None
+    mrn: str | None = None
 
     @field_validator("full_name", "mrn", mode="before")
     @classmethod
@@ -135,8 +134,8 @@ class Patient(BaseModel):
 class ClinicalData(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    diagnosis_list: List[str] = Field(default_factory=list)
-    medications: List[Medication] = Field(default_factory=list)
+    diagnosis_list: list[str] = Field(default_factory=list)
+    medications: list[Medication] = Field(default_factory=list)
     vitals: Vitals = Field(default_factory=Vitals)
 
     @field_validator("diagnosis_list", mode="before")
@@ -178,8 +177,8 @@ class MedicalRecord(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     patient: Patient = Field(default_factory=Patient)
-    encounter: Optional[Encounter] = None
-    encounter_date: Optional[str] = None
+    encounter: Encounter | None = None
+    encounter_date: str | None = None
     clinical: ClinicalData = Field(default_factory=ClinicalData)
 
     @field_validator("encounter_date", mode="before")

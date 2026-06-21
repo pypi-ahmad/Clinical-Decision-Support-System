@@ -19,7 +19,6 @@ from backend.retrieval.chunking import build_chunks_from_ocr_payload, build_chun
 from backend.retrieval.pgvector_store import PgvectorRetrievalStore
 from backend.retrieval.qdrant_store import QdrantRetrievalStore
 
-
 _store_lock = Lock()
 _cached_store = None
 

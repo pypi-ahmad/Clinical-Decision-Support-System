@@ -1,5 +1,5 @@
 import backend.main as main
-from backend.retrieval import hash_identifier, create_vector_store, get_enabled_store_type
+from backend.retrieval import create_vector_store, get_enabled_store_type, hash_identifier
 from backend.retrieval.chunking import build_chunks_from_ocr_payload, build_chunks_from_text, split_text_to_chunks
 from backend.retrieval.vector_store import RetrievalChunk
 
@@ -252,6 +252,7 @@ def test_retrieval_chunk_to_payload_includes_all_fields():
 def test_create_vector_store_returns_none_when_nothing_configured(monkeypatch):
     """Without QDRANT_URL or PGVECTOR_URL, create_vector_store returns None."""
     import backend.retrieval as retrieval
+
     monkeypatch.setattr(retrieval, "get_enabled_store_type", lambda: None)
     store = retrieval.create_vector_store()
     assert store is None
@@ -340,7 +341,9 @@ def test_qdrant_store_upsert_mocked_client(monkeypatch):
     import backend.retrieval.qdrant_store as qs
 
     if qs.QdrantClient is None:
-        pytest.skip("qdrant-client not installed")
+        import pytest as _pytest
+
+        _pytest.skip("qdrant-client not installed")
 
     # Mock the embeddings function to return fixed vectors
     monkeypatch.setattr(qs, "embed_texts", lambda texts, model=None: [[0.1, 0.2, 0.3]] * len(texts))
@@ -389,7 +392,9 @@ def test_qdrant_store_search_mocked_client(monkeypatch):
     import backend.retrieval.qdrant_store as qs
 
     if qs.QdrantClient is None:
-        pytest.skip("qdrant-client not installed")
+        import pytest as _pytest
+
+        _pytest.skip("qdrant-client not installed")
 
     monkeypatch.setattr(qs, "embed_texts", lambda texts, model=None: [[0.1, 0.2, 0.3]])
     monkeypatch.setenv("QDRANT_URL", "http://fake:6333")
