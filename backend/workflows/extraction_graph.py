@@ -20,8 +20,9 @@ import re
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
-from backend.ai_wrapper import AIProviderError, clean_json_output, get_ai_response, parse_model_json
+from backend.ai_wrapper import clean_json_output, get_ai_response, parse_model_json
 from backend.database import get_patient_history
+from backend.errors import AIProviderError, MediscanError
 from backend.extract import run_document_ocr
 from backend.logging_config import get_logger
 from backend.logic import analyze_medical_logic
@@ -258,17 +259,18 @@ def _ocr_per_page_node(state: ExtractionGraphState) -> ExtractionGraphState:
     if state.get("error"):
         return {"ocr": {}}
 
-    ocr_payload = run_document_ocr(
-        state["file_path"],
-        ocr_backend=state.get("ocr_backend", "glm"),
-        ocr_model=state.get("ocr_model"),
-        ocr_prompt_mode=state.get("ocr_prompt_mode", "text"),
-        use_gpu=state.get("use_gpu", True),
-        paddle_service_url=state.get("paddle_service_url"),
-    )
-
-    if "error" in ocr_payload:
-        return {"error": ocr_payload["error"], "ocr": {}}
+    try:
+        ocr_payload = run_document_ocr(
+            state["file_path"],
+            ocr_backend=state.get("ocr_backend", "glm"),
+            ocr_model=state.get("ocr_model"),
+            ocr_prompt_mode=state.get("ocr_prompt_mode", "text"),
+            use_gpu=state.get("use_gpu", True),
+            paddle_service_url=state.get("paddle_service_url"),
+        )
+    except MediscanError as exc:
+        _logger.warning("ocr_failed", reason=str(exc))
+        return {"error": str(exc), "ocr": {}}
 
     per_page = ocr_payload.get("per_page_results", [])
     page_images = ocr_payload.get("page_images", [])
@@ -327,7 +329,7 @@ def _extract_candidate_fields_node(state: ExtractionGraphState) -> ExtractionGra
         candidate_fields = parse_model_json(clean_json_output(response))
         return {"candidate_fields": candidate_fields}
     except AIProviderError as exc:
-        return {"error": f"Structuring failed: {exc.detail}", "candidate_fields": {}}
+        return {"error": f"Structuring failed: {exc}", "candidate_fields": {}}
     except (ValueError, json.JSONDecodeError) as exc:
         return {"error": f"Structuring failed to parse JSON: {exc}", "candidate_fields": {}}
 
