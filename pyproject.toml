@@ -78,8 +78,8 @@ dependencies = [
   "python-magic>=0.4.27; sys_platform != 'win32'",
   "python-magic-bin>=0.4.14; sys_platform == 'win32'",
   # ML runtime (used by PaddleOCR-VL when enabled)
-  "torch>=2.4,<2.6",
-  "torchvision>=0.19,<0.21",
+  "torch>=2.7.1",
+  "torchvision>=0.22",
   # UI
   "streamlit>=1.41.0",
   "streamlit-pdf-viewer>=0.0.19",
