@@ -37,9 +37,7 @@ class Settings(BaseSettings):
     api_key: SecretStr | None = None
     allow_anonymous: bool = False
     allow_user_api_keys: bool = False
-    allowed_origins: str | list[str] = Field(
-        default_factory=lambda: ["http://localhost:8501", "http://127.0.0.1:8501"]
-    )
+    allowed_origins: str | list[str] = Field(default_factory=lambda: ["http://localhost:8501", "http://127.0.0.1:8501"])
     # Maps from MEDISCAN_RATE_LIMIT (legacy boolean toggle)
     enable_rate_limit: bool = Field(
         default=True,
@@ -61,7 +59,7 @@ class Settings(BaseSettings):
         if val.strip().lower() in {"changeme", "change-me"}:
             raise ValueError(
                 "MEDISCAN_API_KEY is set to the placeholder 'changeme'. Generate a "
-                "real secret (e.g. `python -c \"import secrets; print(secrets.token_urlsafe(32))\"`) "
+                'real secret (e.g. `python -c "import secrets; print(secrets.token_urlsafe(32))"`) '
                 "and set it via the environment before starting the server."
             )
         return SecretStr(val)
