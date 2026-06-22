@@ -272,6 +272,10 @@ def _ocr_per_page_node(state: ExtractionGraphState) -> ExtractionGraphState:
         _logger.warning("ocr_failed", reason=str(exc))
         return {"error": str(exc), "ocr": {}}
 
+    if isinstance(ocr_payload, dict) and ocr_payload.get("error"):
+        _logger.warning("ocr_failed", reason=ocr_payload["error"])
+        return {"error": ocr_payload["error"], "ocr": {}}
+
     per_page = ocr_payload.get("per_page_results", [])
     page_images = ocr_payload.get("page_images", [])
     return {

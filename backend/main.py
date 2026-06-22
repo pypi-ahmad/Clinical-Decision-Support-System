@@ -39,9 +39,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from backend.artifacts import ensure_upload_root
-from backend.errors import MediscanError
-from backend.settings import settings
 from backend.database import init_db, record_audit_event, save_record
+from backend.errors import MediscanError
 from backend.extract import process_document_pipeline, run_document_ocr
 from backend.lineage import capture_lineage
 from backend.logging_config import configure_logging, get_logger
@@ -62,6 +61,7 @@ from backend.security import (
     validate_upload_or_raise,
     write_upload_with_limit,
 )
+from backend.settings import settings
 from backend.workflows.agentic_extraction import run_agentic_extraction_workflow
 from backend.workflows.extraction_graph import run_extraction_graph
 
@@ -217,9 +217,12 @@ def _correlation_id() -> str:
 
 
 def _fail(correlation_id: str, message: str, status_code: int = status.HTTP_500_INTERNAL_SERVER_ERROR):
-    """Raise a typed MediscanError and log the internal detail."""
+    """Raise a sanitised HTTPException and log the internal detail."""
     logger.warning("request_failed", correlation_id=correlation_id, reason=message, status=status_code)
-    raise MediscanError(message, status_code=status_code)
+    raise HTTPException(
+        status_code=status_code,
+        detail={"error": "Request failed", "correlation_id": correlation_id},
+    )
 
 
 def _api_key_for(provider: str, user_supplied: str | None) -> str | None:
@@ -239,7 +242,7 @@ def _api_key_for(provider: str, user_supplied: str | None) -> str | None:
     env_value = os.environ.get(env_name) if env_name else None
     if env_value:
         return env_value
-    if user_supplied and settings.allow_user_api_keys:
+    if user_supplied and os.environ.get("MEDISCAN_ALLOW_USER_API_KEYS") == "1":
         return user_supplied
     return None
 
@@ -393,10 +396,9 @@ async def analyze_medical_doc(
             use_gpu=use_gpu,
             paddle_service_url=paddle_service_url,
             return_details=True,
-            structuring_provider=structuring_provider,
-            structuring_model=structuring_model,
-            structuring_api_key=structuring_api_key,
         )
+        if current_result.get("error"):
+            _fail(correlation_id, current_result["error"])
         if "structured_data" in current_result:
             current_data = current_result["structured_data"]
             ocr_payload = current_result.get("ocr") or {}

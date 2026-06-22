@@ -141,6 +141,9 @@ def _extract_document_node(state: ExtractionState) -> ExtractionState:
         _logger.warning("extract_failed", reason=str(exc))
         return {"error": str(exc)}
 
+    if isinstance(result, dict) and result.get("error"):
+        return {"error": result["error"]}
+
     return {
         "structured_data": result["structured_data"],
         "ocr": result.get("ocr", {}),

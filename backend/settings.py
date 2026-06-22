@@ -9,9 +9,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Annotated
-
-from typing import Union
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -40,7 +37,7 @@ class Settings(BaseSettings):
     api_key: SecretStr | None = None
     allow_anonymous: bool = False
     allow_user_api_keys: bool = False
-    allowed_origins: Union[str, list[str]] = Field(
+    allowed_origins: str | list[str] = Field(
         default_factory=lambda: ["http://localhost:8501", "http://127.0.0.1:8501"]
     )
     # Maps from MEDISCAN_RATE_LIMIT (legacy boolean toggle)

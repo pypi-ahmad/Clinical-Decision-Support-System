@@ -11,7 +11,7 @@ from pdf2image import convert_from_path
 
 from backend.ai_wrapper import get_ai_response, parse_model_json
 from backend.artifacts import create_document_workspace, render_document_pages
-from backend.errors import AIProviderError, MediscanError, OCRBackendError, ValidationError
+from backend.errors import AIProviderError, OCRBackendError
 from backend.logging_config import get_logger
 from backend.ocr import materialize_annotations, run_ocr
 from backend.pii_scrub import scrub_text
@@ -78,6 +78,9 @@ def process_document_pipeline(
         use_gpu=use_gpu,
         paddle_service_url=paddle_service_url,
     )
+    if isinstance(ocr_payload, dict) and "error" in ocr_payload:
+        return ocr_payload
+
     raw_text = ocr_payload.get("markdown") or ocr_payload.get("raw_text") or ""
     _logger.info("ocr_complete", raw_text_length=len(raw_text))
 
@@ -101,11 +104,11 @@ def process_document_pipeline(
         if return_details:
             return {"structured_data": structured_data, "ocr": ocr_payload}
         return structured_data
-    except AIProviderError:
-        raise
+    except AIProviderError as exc:
+        return {"error": f"Structuring failed: {exc.detail}"}
     except Exception as exc:
         _logger.warning("structuring_failed", reason=str(exc))
-        raise MediscanError("Structuring failed") from exc
+        return {"error": "Structuring failed"}
 
 
 def run_document_ocr(
@@ -130,10 +133,13 @@ def run_document_ocr(
                     pages=page_count,
                     limit=settings.max_pdf_pages,
                 )
-                raise ValidationError(
-                    f"PDF has {page_count} pages, which exceeds the "
-                    f"{settings.max_pdf_pages}-page cap."
-                )
+                return {
+                    "error": (
+                        f"PDF has {page_count} pages, which exceeds the "
+                        f"{settings.max_pdf_pages}-page cap "
+                        f"(MEDISCAN_MAX_PDF_PAGES)."
+                    )
+                }
         except Exception as exc:  # pragma: no cover - best-effort guard
             # If pdfinfo isn't available we fall through to pdf2image's own
             # error path; the per-page render still gets a chance to fail
@@ -145,10 +151,10 @@ def run_document_ocr(
         page_image_paths = render_document_pages(file_path, workspace, converter=convert_from_path)
     except Exception as exc:
         _logger.warning("pdf_conversion_failed", reason=str(exc))
-        raise ValidationError(f"PDF Conversion failed. Is Poppler installed? Error: {exc}")
+        return {"error": f"PDF Conversion failed. Is Poppler installed? Error: {exc}"}
 
     if not page_image_paths:
-        raise ValidationError("Could not process file format.")
+        return {"error": "Could not process file format."}
 
     normalized_ocr_backend = (ocr_backend or "glm").strip().lower()
     try:
@@ -165,11 +171,15 @@ def run_document_ocr(
         )
         ocr_result = materialize_annotations(file_path, ocr_result, page_image_paths)
         return ocr_result.model_dump()
-    except OCRBackendError:
-        raise
+    except OCRBackendError as exc:
+        if normalized_ocr_backend in {"glm", "glm-ocr", "ollama", "ollama-glm"}:
+            return {"error": f"GLM-OCR failed: {exc}"}
+        return {"error": f"OCR failed: {exc}"}
     except Exception as exc:
         _logger.warning("ocr_failed", reason=str(exc), backend=normalized_ocr_backend)
-        raise OCRBackendError(str(exc)) from exc
+        if normalized_ocr_backend in {"glm", "glm-ocr", "ollama", "ollama-glm"}:
+            return {"error": f"GLM-OCR failed: {exc}"}
+        return {"error": f"OCR failed: {exc}"}
 
 
 def _build_structuring_user_input(ocr_payload: dict[str, Any], *, provider: str | None = None) -> tuple[str, str]:
