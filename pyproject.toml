@@ -104,6 +104,12 @@ mediscan-api = "backend.main:run"  # placeholder; real CLI lands in 1.1
 managed = true
 package = false  # we ship a service image, not a pip wheel (yet)
 
+# `uv sync` and `uv run` install the runtime deps (from [project.dependencies])
+# plus these groups by default. The dev and test groups cover everything the
+# test suite + lint + type-check + docs workflow need; the optional group is
+# only installed when explicitly requested via `uv sync --group <name>`.
+default-groups = ["dev", "test"]
+
 # ---------------------------------------------------------------------------
 # Dependency groups (PEP 735). `uv sync` installs `dev` + `test` by default.
 # CI uses `uv sync --no-dev` to install the runtime env, then `uv sync` to add
