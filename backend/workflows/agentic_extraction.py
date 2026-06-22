@@ -12,6 +12,7 @@ import json
 from typing import Any, TypedDict
 
 from backend.database import get_patient_history
+from backend.errors import MediscanError
 from backend.extract import process_document_pipeline
 from backend.logging_config import get_logger
 from backend.logic import analyze_medical_logic
@@ -120,23 +121,25 @@ def run_agentic_extraction_workflow(
 
 
 def _extract_document_node(state: ExtractionState) -> ExtractionState:
-    result = process_document_pipeline(
-        state["file_path"],
-        state.get("structuring_provider", "Ollama"),
-        state.get("structuring_model", "glm-4.7-flash"),
-        state.get("structuring_api_key"),
-        ocr_backend=state.get("ocr_backend", "glm"),
-        ocr_model=state.get("ocr_model"),
-        ocr_prompt_mode=state.get("ocr_prompt_mode", "text"),
-        use_gpu=state.get("use_gpu", True),
-        paddle_service_url=state.get("paddle_service_url"),
-        return_details=True,
-        structuring_provider=state.get("structuring_provider"),
-        structuring_model=state.get("structuring_model"),
-        structuring_api_key=state.get("structuring_api_key"),
-    )
-    if "error" in result:
-        return {"error": result["error"]}
+    try:
+        result = process_document_pipeline(
+            state["file_path"],
+            state.get("structuring_provider", "Ollama"),
+            state.get("structuring_model", "glm-4.7-flash"),
+            state.get("structuring_api_key"),
+            ocr_backend=state.get("ocr_backend", "glm"),
+            ocr_model=state.get("ocr_model"),
+            ocr_prompt_mode=state.get("ocr_prompt_mode", "text"),
+            use_gpu=state.get("use_gpu", True),
+            paddle_service_url=state.get("paddle_service_url"),
+            return_details=True,
+            structuring_provider=state.get("structuring_provider"),
+            structuring_model=state.get("structuring_model"),
+            structuring_api_key=state.get("structuring_api_key"),
+        )
+    except MediscanError as exc:
+        _logger.warning("extract_failed", reason=str(exc))
+        return {"error": str(exc)}
 
     return {
         "structured_data": result["structured_data"],

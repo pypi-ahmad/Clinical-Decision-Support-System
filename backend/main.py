@@ -35,10 +35,12 @@ import aiofiles
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.params import Form as FormFieldInfo
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from backend.artifacts import ensure_upload_root
+from backend.errors import MediscanError
+from backend.settings import settings
 from backend.database import init_db, record_audit_event, save_record
 from backend.extract import process_document_pipeline, run_document_ocr
 from backend.lineage import capture_lineage
@@ -78,7 +80,7 @@ async def _lifespan(app: FastAPI):
     init_db()
     # Security: refuse to run with the well-known placeholder key from
     # docker-compose.yml. Operators must supply a real secret.
-    if os.environ.get("MEDISCAN_API_KEY", "").strip().lower() in {"changeme", "change-me"}:
+    if settings.api_key.strip().lower() in {"changeme", "change-me"}:
         raise RuntimeError(
             "MEDISCAN_API_KEY is set to the placeholder 'changeme'. Generate a "
             "real secret (e.g. `python -c 'import secrets; print(secrets.token_urlsafe(32))'`) "
@@ -108,7 +110,7 @@ async def _lifespan(app: FastAPI):
 
 
 def _build_app() -> FastAPI:
-    disable_docs = os.environ.get("MEDISCAN_ENABLE_DOCS", "0") != "1"
+    disable_docs = not settings.enable_docs
     return FastAPI(
         lifespan=_lifespan,
         docs_url=None if disable_docs else "/docs",
@@ -140,18 +142,16 @@ try:  # pragma: no cover - optional dependency wiring
     from slowapi.middleware import SlowAPIMiddleware
     from slowapi.util import get_remote_address
 
-    _rate_limit_enabled = os.environ.get("MEDISCAN_RATE_LIMIT", "1") != "0"
+    _rate_limit_enabled = settings.enable_rate_limit
     if _rate_limit_enabled:
         limiter = Limiter(
             key_func=get_remote_address,
-            default_limits=[os.environ.get("MEDISCAN_DEFAULT_RATE", "60/minute")],
+            default_limits=[settings.default_rate_limit],
         )
         app.state.limiter = limiter
         app.add_middleware(SlowAPIMiddleware)
 
         async def _rate_limit_handler(request, exc):
-            from fastapi.responses import JSONResponse
-
             return JSONResponse(status_code=429, content={"error": "Rate limit exceeded"})
 
         app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
@@ -160,11 +160,8 @@ except Exception:  # pragma: no cover - slowapi optional
 
 
 def _allowed_origins() -> list[str]:
-    raw = os.environ.get("MEDISCAN_ALLOWED_ORIGINS")
-    if not raw:
-        # Default to the local Streamlit dev server only.
-        return ["http://localhost:8501", "http://127.0.0.1:8501"]
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    # Validator already parses comma-separated or JSON env var into list[str].
+    return list(settings.allowed_origins)
 
 
 app.add_middleware(
@@ -174,6 +171,20 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Authorization", "Content-Type", "X-API-Key"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Typed exception handler — converts pipeline-level MediscanError to a
+# sanitised JSON response consistent with the ``_fail()`` helper.
+# ---------------------------------------------------------------------------
+
+
+@app.exception_handler(MediscanError)
+async def _mediscan_error_handler(request, exc: MediscanError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": "Request failed", "detail": str(exc)},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -206,12 +217,9 @@ def _correlation_id() -> str:
 
 
 def _fail(correlation_id: str, message: str, status_code: int = status.HTTP_500_INTERNAL_SERVER_ERROR):
-    """Raise a sanitised HTTPException and log the internal detail."""
+    """Raise a typed MediscanError and log the internal detail."""
     logger.warning("request_failed", correlation_id=correlation_id, reason=message, status=status_code)
-    raise HTTPException(
-        status_code=status_code,
-        detail={"error": "Request failed", "correlation_id": correlation_id},
-    )
+    raise MediscanError(message, status_code=status_code)
 
 
 def _api_key_for(provider: str, user_supplied: str | None) -> str | None:
@@ -231,7 +239,7 @@ def _api_key_for(provider: str, user_supplied: str | None) -> str | None:
     env_value = os.environ.get(env_name) if env_name else None
     if env_value:
         return env_value
-    if user_supplied and os.environ.get("MEDISCAN_ALLOW_USER_API_KEYS") == "1":
+    if user_supplied and settings.allow_user_api_keys:
         return user_supplied
     return None
 
@@ -389,9 +397,6 @@ async def analyze_medical_doc(
             structuring_model=structuring_model,
             structuring_api_key=structuring_api_key,
         )
-        if "error" in current_result:
-            _fail(correlation_id, current_result["error"])
-
         if "structured_data" in current_result:
             current_data = current_result["structured_data"]
             ocr_payload = current_result.get("ocr") or {}
@@ -514,17 +519,18 @@ async def check_insurance(
     suffix = Path(policy_path).suffix.lower()
     policy_text = ""
     if policy_ocr or suffix != ".txt":
-        ocr_payload = await run_in_threadpool(
-            run_document_ocr,
-            str(policy_path),
-            ocr_backend=ocr_backend,
-            ocr_model=ocr_model,
-            ocr_prompt_mode=ocr_mode,
-            use_gpu=use_gpu,
-            paddle_service_url=paddle_service_url,
-        )
-        if "error" in ocr_payload:
-            _fail(correlation_id, ocr_payload["error"])
+        try:
+            ocr_payload = await run_in_threadpool(
+                run_document_ocr,
+                str(policy_path),
+                ocr_backend=ocr_backend,
+                ocr_model=ocr_model,
+                ocr_prompt_mode=ocr_mode,
+                use_gpu=use_gpu,
+                paddle_service_url=paddle_service_url,
+            )
+        except MediscanError as exc:
+            _fail(correlation_id, str(exc))
         policy_text = ocr_payload.get("markdown") or ocr_payload.get("raw_text") or ""
     else:
         # Plaintext policy — read from disk with a hard size guard already
@@ -819,8 +825,8 @@ def _retrieve_policy_context(medical_data: dict, policy_text: str, policy_docume
 if __name__ == "__main__":
     import uvicorn
 
-    host = os.environ.get("MEDISCAN_HOST", "127.0.0.1")
-    port = int(os.environ.get("MEDISCAN_PORT", "8000"))
+    host = settings.host
+    port = settings.port
     uvicorn.run(
         "backend.main:app",
         host=host,
