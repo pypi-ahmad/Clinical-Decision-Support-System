@@ -5,6 +5,7 @@ on:
     branches: [main, master, 'release/**']
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
 
 # Cancel any in-flight run for the same ref. Newer pushes win.
 concurrency:
@@ -118,8 +119,7 @@ jobs:
   test-live:
     name: Test (live stack, opt-in)
     runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch'
     services:
       qdrant:
         image: qdrant/qdrant:v1.12.4
