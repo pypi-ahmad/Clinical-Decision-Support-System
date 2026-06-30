@@ -18,39 +18,34 @@ Short path for running the current implementation locally.
 - Optional Qdrant semantic retrieval wired into analysis and insurance reasoning
 - Annotated PDF/image output with bounding box visualization
 
-## 1. Create and activate a virtual environment
+## 1. Create and activate a virtual environment (uv)
+
+```bash
+uv python install 3.12.10
+uv venv --python 3.12.10
+source .venv/bin/activate
+```
+
+Windows PowerShell:
 
 ```powershell
-python -m venv .venv
+uv python install 3.12.10
+uv venv --python 3.12.10
 .\.venv\Scripts\Activate.ps1
 ```
 
-## 2. Install base dependencies
+## 2. Install dependencies
 
-For a reproducible, hash-verified install (recommended for CI/prod):
+For day-to-day development and tests:
 
 ```bash
-python -m pip install --upgrade pip
-python -m pip install --require-hashes --no-deps -r requirements.lock.txt
+uv sync --frozen
 ```
 
-For day-to-day dev against the ranges in `requirements.txt`:
+For runtime-only dependencies:
 
 ```bash
-python -m pip install -r requirements.txt
-```
-
-Regenerate the lockfile when you intentionally change `requirements.txt`:
-
-```bash
-uv pip compile --python-version 3.11 --index-strategy unsafe-best-match \
-  --generate-hashes --output-file requirements.lock.txt requirements.txt
-```
-
-If you want PaddleOCR-VL local Python mode, also install:
-
-```bash
-python -m pip install "paddleocr[doc-parser]"
+uv sync --frozen --no-dev
 ```
 
 ## 3. Ensure local prerequisites
@@ -69,13 +64,13 @@ $env:QDRANT_ENABLED = "true"
 ## 4. Run the backend
 
 ```bash
-python -m uvicorn backend.main:app --reload --port 8000
+uv run --frozen uvicorn backend.main:app --reload --port 8000
 ```
 
 ## 5. Run the frontend
 
 ```bash
-streamlit run frontend/app.py
+uv run --frozen streamlit run frontend/app.py
 ```
 
 ## 6. Use the app
@@ -92,7 +87,7 @@ streamlit run frontend/app.py
 ## Test command
 
 ```bash
-python -m pytest
+uv run --frozen pytest
 ```
 
 ## Notes

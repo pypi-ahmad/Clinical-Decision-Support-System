@@ -24,10 +24,12 @@ failures into sanitized HTTP errors. Notable changes over the original:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +70,18 @@ from backend.workflows.extraction_graph import run_extraction_graph
 configure_logging()
 logger = get_logger(__name__)
 
+_DEFAULT_ANALYSIS = {"summary": "Analysis failed", "alerts": [], "trends": []}
+
+
+@dataclass(slots=True)
+class ExtractionOutcome:
+    current_data: dict[str, Any]
+    ocr_payload: dict[str, Any]
+    past_data: dict[str, Any] | None
+    analysis: dict[str, Any]
+    requires_human_review: bool
+    vector_index_status: dict[str, Any] | None
+
 
 # ---------------------------------------------------------------------------
 # Lifespan: DB bootstrap + upload root
@@ -80,7 +94,8 @@ async def _lifespan(app: FastAPI):
     init_db()
     # Security: refuse to run with the well-known placeholder key from
     # docker-compose.yml. Operators must supply a real secret.
-    if settings.api_key.strip().lower() in {"changeme", "change-me"}:
+    api_key_value = settings.api_key.get_secret_value().strip() if settings.api_key else ""
+    if api_key_value.lower() in {"changeme", "change-me"}:
         raise RuntimeError(
             "MEDISCAN_API_KEY is set to the placeholder 'changeme'. Generate a "
             "real secret (e.g. `python -c 'import secrets; print(secrets.token_urlsafe(32))'`) "
@@ -277,6 +292,177 @@ async def _save_upload(upload: UploadFile, declared_mime: str) -> tuple[Path, in
     return destination, written
 
 
+def _compact_json(payload: dict[str, Any]) -> str:
+    """Serialize dict payloads once with compact separators for RAG fallbacks."""
+    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+
+
+def _as_dict(payload: Any) -> dict[str, Any]:
+    return payload if isinstance(payload, dict) else {}
+
+
+def _analysis_or_default(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, dict):
+        return payload
+    return dict(_DEFAULT_ANALYSIS)
+
+
+def _outcome_from_workflow_result(workflow_result: dict[str, Any]) -> ExtractionOutcome:
+    return ExtractionOutcome(
+        current_data=_as_dict(workflow_result.get("structured_data")),
+        ocr_payload=_as_dict(workflow_result.get("ocr")),
+        past_data=workflow_result.get("past_data") if isinstance(workflow_result.get("past_data"), dict) else None,
+        analysis=_analysis_or_default(workflow_result.get("analysis")),
+        requires_human_review=bool(workflow_result.get("requires_human_review", False)),
+        vector_index_status=_as_dict(workflow_result.get("vector_index_status")) or None,
+    )
+
+
+async def _run_direct_extraction_mode(
+    *,
+    file_path: str,
+    structuring_provider: str,
+    structuring_model: str,
+    structuring_api_key: str | None,
+    reasoning_provider: str,
+    reasoning_model: str,
+    reasoning_api_key: str | None,
+    ocr_backend: str,
+    ocr_model: str | None,
+    ocr_mode: str,
+    use_gpu: bool,
+    paddle_service_url: str | None,
+) -> ExtractionOutcome:
+    current_result = await run_in_threadpool(
+        _call_document_pipeline,
+        file_path,
+        structuring_provider,
+        structuring_model,
+        structuring_api_key,
+        ocr_backend=ocr_backend,
+        ocr_model=ocr_model,
+        ocr_prompt_mode=ocr_mode,
+        use_gpu=use_gpu,
+        paddle_service_url=paddle_service_url,
+        return_details=True,
+    )
+    if _as_dict(current_result).get("error"):
+        raise RuntimeError(str(current_result["error"]))
+
+    if "structured_data" in _as_dict(current_result):
+        current_data = _as_dict(current_result.get("structured_data"))
+        ocr_payload = _as_dict(current_result.get("ocr"))
+    else:
+        current_data = _as_dict(current_result)
+        ocr_payload = {}
+
+    mrn = _as_dict(current_data.get("patient")).get("mrn")
+    if mrn:
+        history_task = run_in_threadpool(_load_history, mrn)
+        retrieval_task = run_in_threadpool(_retrieve_patient_context, current_data, ocr_payload)
+        past_data, retrieved_context = await asyncio.gather(history_task, retrieval_task)
+    else:
+        past_data = None
+        retrieved_context = await run_in_threadpool(_retrieve_patient_context, current_data, ocr_payload)
+
+    analysis = await run_in_threadpool(
+        analyze_medical_logic,
+        current_data,
+        past_data,
+        reasoning_provider,
+        reasoning_model,
+        reasoning_api_key,
+        retrieved_context=retrieved_context,
+    )
+    vector_index_status = await run_in_threadpool(
+        _index_for_retrieval,
+        file_path,
+        current_data,
+        ocr_payload,
+    )
+    return ExtractionOutcome(
+        current_data=current_data,
+        ocr_payload=ocr_payload,
+        past_data=_as_dict(past_data) or None,
+        analysis=_analysis_or_default(analysis),
+        requires_human_review=False,
+        vector_index_status=_as_dict(vector_index_status) or None,
+    )
+
+
+async def _run_extraction_mode(
+    *,
+    file_path: str,
+    extraction_graph_mode: bool,
+    agentic_mode: bool,
+    structuring_provider: str,
+    structuring_model: str,
+    structuring_api_key: str | None,
+    reasoning_provider: str,
+    reasoning_model: str,
+    reasoning_api_key: str | None,
+    ocr_backend: str,
+    ocr_model: str | None,
+    ocr_mode: str,
+    use_gpu: bool,
+    paddle_service_url: str | None,
+) -> ExtractionOutcome:
+    if extraction_graph_mode:
+        graph_result = await run_in_threadpool(
+            run_extraction_graph,
+            file_path=file_path,
+            structuring_provider=structuring_provider,
+            structuring_model=structuring_model,
+            structuring_api_key=structuring_api_key,
+            reasoning_provider=reasoning_provider,
+            reasoning_model=reasoning_model,
+            reasoning_api_key=reasoning_api_key,
+            ocr_backend=ocr_backend,
+            ocr_model=ocr_model,
+            ocr_prompt_mode=ocr_mode,
+            use_gpu=use_gpu,
+            paddle_service_url=paddle_service_url,
+        )
+        if _as_dict(graph_result).get("error"):
+            raise RuntimeError(str(graph_result["error"]))
+        return _outcome_from_workflow_result(_as_dict(graph_result))
+
+    if agentic_mode:
+        workflow_result = await run_in_threadpool(
+            run_agentic_extraction_workflow,
+            file_path=file_path,
+            structuring_provider=structuring_provider,
+            structuring_model=structuring_model,
+            structuring_api_key=structuring_api_key,
+            reasoning_provider=reasoning_provider,
+            reasoning_model=reasoning_model,
+            reasoning_api_key=reasoning_api_key,
+            ocr_backend=ocr_backend,
+            ocr_model=ocr_model,
+            ocr_prompt_mode=ocr_mode,
+            use_gpu=use_gpu,
+            paddle_service_url=paddle_service_url,
+        )
+        if _as_dict(workflow_result).get("error"):
+            raise RuntimeError(str(workflow_result["error"]))
+        return _outcome_from_workflow_result(_as_dict(workflow_result))
+
+    return await _run_direct_extraction_mode(
+        file_path=file_path,
+        structuring_provider=structuring_provider,
+        structuring_model=structuring_model,
+        structuring_api_key=structuring_api_key,
+        reasoning_provider=reasoning_provider,
+        reasoning_model=reasoning_model,
+        reasoning_api_key=reasoning_api_key,
+        ocr_backend=ocr_backend,
+        ocr_model=ocr_model,
+        ocr_mode=ocr_mode,
+        use_gpu=use_gpu,
+        paddle_service_url=paddle_service_url,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -333,10 +519,11 @@ async def analyze_medical_doc(
 
     absolute_path = str(file_path)
 
-    if extraction_graph_mode:
-        graph_result = await run_in_threadpool(
-            run_extraction_graph,
+    try:
+        outcome = await _run_extraction_mode(
             file_path=absolute_path,
+            extraction_graph_mode=extraction_graph_mode,
+            agentic_mode=agentic_mode,
             structuring_provider=structuring_provider,
             structuring_model=structuring_model,
             structuring_api_key=structuring_api_key,
@@ -345,86 +532,19 @@ async def analyze_medical_doc(
             reasoning_api_key=reasoning_api_key,
             ocr_backend=ocr_backend,
             ocr_model=ocr_model,
-            ocr_prompt_mode=ocr_mode,
+            ocr_mode=ocr_mode,
             use_gpu=use_gpu,
             paddle_service_url=paddle_service_url,
         )
-        if graph_result.get("error"):
-            _fail(correlation_id, graph_result["error"])
+    except RuntimeError as exc:
+        _fail(correlation_id, str(exc))
 
-        current_data = graph_result.get("structured_data") or {}
-        ocr_payload = graph_result.get("ocr") or {}
-        past_data = graph_result.get("past_data")
-        analysis = graph_result.get("analysis") or {"summary": "Analysis failed", "alerts": [], "trends": []}
-        requires_human_review = graph_result.get("requires_human_review", False)
-        vector_index_status = graph_result.get("vector_index_status")
-    elif agentic_mode:
-        workflow_result = await run_in_threadpool(
-            run_agentic_extraction_workflow,
-            file_path=absolute_path,
-            structuring_provider=structuring_provider,
-            structuring_model=structuring_model,
-            structuring_api_key=structuring_api_key,
-            reasoning_provider=reasoning_provider,
-            reasoning_model=reasoning_model,
-            reasoning_api_key=reasoning_api_key,
-            ocr_backend=ocr_backend,
-            ocr_model=ocr_model,
-            ocr_prompt_mode=ocr_mode,
-            use_gpu=use_gpu,
-            paddle_service_url=paddle_service_url,
-        )
-        if workflow_result.get("error"):
-            _fail(correlation_id, workflow_result["error"])
-
-        current_data = workflow_result.get("structured_data") or {}
-        ocr_payload = workflow_result.get("ocr") or {}
-        past_data = workflow_result.get("past_data")
-        analysis = workflow_result.get("analysis") or {"summary": "Analysis failed", "alerts": [], "trends": []}
-        requires_human_review = workflow_result.get("requires_human_review", False)
-        vector_index_status = workflow_result.get("vector_index_status")
-    else:
-        current_result = await run_in_threadpool(
-            _call_document_pipeline,
-            absolute_path,
-            structuring_provider,
-            structuring_model,
-            structuring_api_key,
-            ocr_backend=ocr_backend,
-            ocr_model=ocr_model,
-            ocr_prompt_mode=ocr_mode,
-            use_gpu=use_gpu,
-            paddle_service_url=paddle_service_url,
-            return_details=True,
-        )
-        if current_result.get("error"):
-            _fail(correlation_id, current_result["error"])
-        if "structured_data" in current_result:
-            current_data = current_result["structured_data"]
-            ocr_payload = current_result.get("ocr") or {}
-        else:
-            current_data = current_result
-            ocr_payload = {}
-
-        mrn = current_data.get("patient", {}).get("mrn")
-        past_data = await run_in_threadpool(_load_history, mrn) if mrn else None
-        retrieved_context = await run_in_threadpool(_retrieve_patient_context, current_data, ocr_payload)
-        analysis = await run_in_threadpool(
-            analyze_medical_logic,
-            current_data,
-            past_data,
-            reasoning_provider,
-            reasoning_model,
-            reasoning_api_key,
-            retrieved_context=retrieved_context,
-        )
-        requires_human_review = False
-        vector_index_status = await run_in_threadpool(
-            _index_for_retrieval,
-            absolute_path,
-            current_data,
-            ocr_payload,
-        )
+    current_data = outcome.current_data
+    ocr_payload = outcome.ocr_payload
+    past_data = outcome.past_data
+    analysis = outcome.analysis
+    requires_human_review = outcome.requires_human_review
+    vector_index_status = outcome.vector_index_status
 
     if not current_data:
         _fail(correlation_id, "extraction produced no structured data")
@@ -443,13 +563,10 @@ async def analyze_medical_doc(
         "extracted": current_data,
         "analysis": analysis,
         "history_available": bool(past_data),
-        "file_path": absolute_path,
         "file_url": ocr_payload.get("artifact_manifest", {}).get("original_file_url"),
         "ocr": ocr_payload,
         "bounding_boxes": ocr_payload.get("bounding_boxes", []),
-        "annotated_pdf_path": ocr_payload.get("artifact_manifest", {}).get("annotated_pdf_path"),
         "annotated_pdf_url": ocr_payload.get("artifact_manifest", {}).get("annotated_pdf_url"),
-        "annotated_image_paths": ocr_payload.get("artifact_manifest", {}).get("annotated_image_paths", []),
         "annotated_image_urls": ocr_payload.get("artifact_manifest", {}).get("annotated_image_urls", []),
         "page_image_urls": ocr_payload.get("artifact_manifest", {}).get("page_image_urls", []),
         "requires_human_review": requires_human_review,
@@ -747,7 +864,7 @@ def _index_for_retrieval(file_path: str, current_data: dict, ocr_payload: dict):
         if not chunks:
             chunks = build_chunks_from_text(
                 file_path,
-                json.dumps(current_data),
+                _compact_json(current_data),
                 metadata,
                 section_type="structured_json",
             )
@@ -771,7 +888,7 @@ def _retrieve_patient_context(current_data: dict, ocr_payload: dict) -> list[dic
     medication_names = [item.get("name") for item in medications if isinstance(item, dict) and item.get("name")]
     query = ", ".join(diagnosis_list + medication_names)
     if not query:
-        query = ocr_payload.get("raw_text") or ocr_payload.get("markdown") or json.dumps(current_data)
+        query = ocr_payload.get("raw_text") or ocr_payload.get("markdown") or _compact_json(current_data)
 
     try:
         results = store.search(
@@ -805,7 +922,7 @@ def _retrieve_policy_context(medical_data: dict, policy_text: str, policy_docume
         if chunks:
             store.upsert_chunks(chunks)
         diagnoses = medical_data.get("clinical", {}).get("diagnosis_list", [])
-        query = ", ".join(diagnoses) or json.dumps(medical_data)
+        query = ", ".join(diagnoses) or _compact_json(medical_data)
         results = store.search(
             query,
             limit=5,

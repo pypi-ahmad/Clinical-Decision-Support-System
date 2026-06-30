@@ -151,23 +151,24 @@ focused references, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
 git clone https://github.com/pypi-ahmad/Clinical-Decision-Support-System.git
 cd Clinical-Decision-Support-System
 
-# Environment
-python -m venv .venv && .venv\Scripts\Activate.ps1   # Windows
-# source .venv/bin/activate                           # Linux / macOS
+# Environment (uv-managed)
+uv python install 3.12.10
+uv venv --python 3.12.10
+source .venv/bin/activate            # Linux / macOS
+# .\.venv\Scripts\Activate.ps1       # Windows PowerShell
 
-# Dependencies (reproducible build uses the lock file)
-pip install --upgrade pip
-pip install -r requirements.lock.txt                  # or: pip install -r requirements.txt
+# Dependencies
+uv sync --frozen
 
 # Required env vars
-$env:MEDISCAN_API_KEY = "change-me-to-a-long-random-string"   # required by every data route
-$env:MRN_HMAC_PEPPER  = "long-random-server-only-secret"      # required for retrieval / audit linkage
+export MEDISCAN_API_KEY="change-me-to-a-long-random-string"   # required by every data route
+export MRN_HMAC_PEPPER="long-random-server-only-secret"       # required for retrieval / audit linkage
 # Local dev only (skips auth — DO NOT set in production):
-# $env:MEDISCAN_ALLOW_ANONYMOUS = "1"
+# export MEDISCAN_ALLOW_ANONYMOUS=1
 
 # Launch
-python -m uvicorn backend.main:app --reload --port 8000   # Terminal 1
-streamlit run frontend/app.py                              # Terminal 2
+uv run --frozen uvicorn backend.main:app --reload --port 8000   # Terminal 1
+uv run --frozen streamlit run frontend/app.py                    # Terminal 2
 ```
 
 > **Prerequisites:** [Poppler](https://poppler.freedesktop.org/) for PDF rendering, [Ollama](https://ollama.com/) for local LLM inference. Pull the default OCR model with `ollama pull glm-ocr`. See [USAGE.md](USAGE.md) for PaddleOCR-VL and Qdrant setup.
@@ -279,12 +280,12 @@ Accepts a JSON body conforming to the `MedicalRecord` schema. Writes the confirm
 ## Testing
 
 ```bash
-python -m pytest                     # Full suite with coverage (241 passed, 8 skipped — all live tests auto-skip without services)
-python -m pytest tests/unit/         # Unit tests only
-python -m pytest tests/integration/  # Integration tests only
-python -m pytest -m eval             # Quality-evaluation harness (skips when no gold fixtures)
-python -m pytest -k "extraction_graph" -v           # Filtered run
-python -m pytest tests/integration/test_live_pipeline.py -v  # Live tests (require running services)
+uv run --frozen pytest                     # Full suite with coverage (241 passed, 8 skipped — all live tests auto-skip without services)
+uv run --frozen pytest tests/unit/         # Unit tests only
+uv run --frozen pytest tests/integration/  # Integration tests only
+uv run --frozen pytest -m eval             # Quality-evaluation harness (skips when no gold fixtures)
+uv run --frozen pytest -k "extraction_graph" -v           # Filtered run
+uv run --frozen pytest tests/integration/test_live_pipeline.py -v  # Live tests (require running services)
 ```
 
 ### Verification Tiers

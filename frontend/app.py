@@ -13,9 +13,11 @@ It communicates with the FastAPI backend via HTTP requests.
 
 import json
 import os
+from copy import deepcopy
+from dataclasses import dataclass
 
+import httpx
 import pandas as pd
-import requests
 import streamlit as st
 from streamlit_pdf_viewer import pdf_viewer
 
@@ -25,10 +27,78 @@ API_KEY = os.environ.get("MEDISCAN_API_KEY", "")
 # PDFs on CPU Ollama. The previous default of 60s produced spurious
 # "Connection Error" toasts mid-analysis.
 DEFAULT_TIMEOUT = int(os.environ.get("MEDISCAN_CLIENT_TIMEOUT", "600"))
+HTTP_TIMEOUT = httpx.Timeout(DEFAULT_TIMEOUT)
 
 
 def _auth_headers() -> dict[str, str]:
     return {"X-API-Key": API_KEY} if API_KEY else {}
+
+
+@st.cache_resource
+def _api_client() -> httpx.Client:
+    return httpx.Client(
+        base_url=API_URL,
+        headers=_auth_headers(),
+        timeout=HTTP_TIMEOUT,
+    )
+
+
+@dataclass(frozen=True)
+class AnalyzePayload:
+    structuring_provider: str
+    structuring_model: str
+    structuring_api_key: str
+    reasoning_provider: str
+    reasoning_model: str
+    reasoning_api_key: str
+    ocr_backend: str
+    ocr_model: str
+    ocr_mode: str
+    use_gpu: bool
+    agentic_mode: bool
+    extraction_graph_mode: bool
+
+    def as_form(self) -> dict[str, str]:
+        return {
+            "structuring_provider": self.structuring_provider,
+            "structuring_model": self.structuring_model,
+            "structuring_api_key": self.structuring_api_key,
+            "reasoning_provider": self.reasoning_provider,
+            "reasoning_model": self.reasoning_model,
+            "reasoning_api_key": self.reasoning_api_key,
+            "ocr_backend": self.ocr_backend,
+            "ocr_model": self.ocr_model,
+            "ocr_mode": self.ocr_mode,
+            "use_gpu": str(self.use_gpu).lower(),
+            "agentic_mode": str(self.agentic_mode).lower(),
+            "extraction_graph_mode": str(self.extraction_graph_mode).lower(),
+        }
+
+
+@dataclass(frozen=True)
+class InsurancePayload:
+    medical_json: str
+    reasoning_provider: str
+    reasoning_model: str
+    reasoning_api_key: str
+    ocr_backend: str
+    ocr_model: str
+    ocr_mode: str
+    use_gpu: bool
+    policy_ocr: bool
+
+    def as_form(self) -> dict[str, str]:
+        return {
+            "medical_json": self.medical_json,
+            "reasoning_provider": self.reasoning_provider,
+            "reasoning_model": self.reasoning_model,
+            "reasoning_api_key": self.reasoning_api_key,
+            "ocr_backend": self.ocr_backend,
+            "ocr_model": self.ocr_model,
+            "ocr_mode": self.ocr_mode,
+            "use_gpu": str(self.use_gpu).lower(),
+            "policy_ocr": str(self.policy_ocr).lower(),
+        }
 
 
 PROVIDER_MODELS = {
@@ -49,37 +119,22 @@ PROVIDER_MODELS = {
 st.set_page_config(page_title="MediScan AI", layout="wide", page_icon="🏥")
 
 # --- Session State Management ---
-# Initialize session variables to persist data across re-runs
-if "extracted_data" not in st.session_state:
-    st.session_state["extracted_data"] = None
-if "analysis" not in st.session_state:
-    st.session_state["analysis"] = None
-if "pdf_path" not in st.session_state:
-    st.session_state["pdf_path"] = None
-if "file_url" not in st.session_state:
-    st.session_state["file_url"] = None
-if "ocr_artifacts" not in st.session_state:
-    st.session_state["ocr_artifacts"] = None
-if "annotated_pdf_path" not in st.session_state:
-    st.session_state["annotated_pdf_path"] = None
-if "annotated_pdf_url" not in st.session_state:
-    st.session_state["annotated_pdf_url"] = None
-if "annotated_image_paths" not in st.session_state:
-    st.session_state["annotated_image_paths"] = []
-if "annotated_image_urls" not in st.session_state:
-    st.session_state["annotated_image_urls"] = []
-if "page_image_urls" not in st.session_state:
-    st.session_state["page_image_urls"] = []
-if "bounding_boxes" not in st.session_state:
-    st.session_state["bounding_boxes"] = []
-if "requires_human_review" not in st.session_state:
-    st.session_state["requires_human_review"] = False
-if "vector_index_status" not in st.session_state:
-    st.session_state["vector_index_status"] = None
-if "retrieval_enabled" not in st.session_state:
-    st.session_state["retrieval_enabled"] = False
-if "ocr_supports_bboxes" not in st.session_state:
-    st.session_state["ocr_supports_bboxes"] = False
+SESSION_DEFAULTS: dict[str, object] = {
+    "extracted_data": None,
+    "analysis": None,
+    "file_url": None,
+    "ocr_artifacts": None,
+    "annotated_pdf_url": None,
+    "annotated_image_urls": [],
+    "page_image_urls": [],
+    "bounding_boxes": [],
+    "requires_human_review": False,
+    "vector_index_status": None,
+    "retrieval_enabled": False,
+    "ocr_supports_bboxes": False,
+}
+for _state_key, _default_value in SESSION_DEFAULTS.items():
+    st.session_state.setdefault(_state_key, deepcopy(_default_value))
 
 
 def render_model_config(title: str, key_prefix: str, default_provider: str = "Ollama"):
@@ -106,12 +161,12 @@ def artifact_url(path: str | None) -> str | None:
     return f"{API_URL}{path}"
 
 
-def fetch_artifact_bytes(path: str | None) -> bytes | None:
-    url = artifact_url(path)
-    if not url:
+@st.cache_data(ttl=120)
+def _fetch_artifact_bytes(path: str) -> bytes | None:
+    if not path:
         return None
     try:
-        response = requests.get(url, timeout=DEFAULT_TIMEOUT, headers=_auth_headers())
+        response = _api_client().get(path)
         response.raise_for_status()
         return response.content
     except Exception:
@@ -119,7 +174,7 @@ def fetch_artifact_bytes(path: str | None) -> bytes | None:
 
 
 def render_pdf_preview(path: str | None, height: int = 800):
-    content = fetch_artifact_bytes(path)
+    content = _fetch_artifact_bytes(path or "")
     if content:
         pdf_viewer(input=content, width=700, height=height)
     else:
@@ -127,7 +182,7 @@ def render_pdf_preview(path: str | None, height: int = 800):
 
 
 def render_download_button(label: str, path: str | None, file_name: str, mime: str):
-    content = fetch_artifact_bytes(path)
+    content = _fetch_artifact_bytes(path or "")
     if content:
         st.download_button(label, data=content, file_name=file_name, mime=mime, use_container_width=True)
 
@@ -192,44 +247,37 @@ with st.sidebar:
         with st.spinner(
             f"Running Analysis with {structuring_provider} ({structuring_model}) and {reasoning_provider} ({reasoning_model})..."
         ):
-            files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
-            data = {
-                "provider": structuring_provider,
-                "model": structuring_model,
-                "api_key": structuring_api_key if structuring_api_key else "",
-                "structuring_provider": structuring_provider,
-                "structuring_model": structuring_model,
-                "structuring_api_key": structuring_api_key if structuring_api_key else "",
-                "reasoning_provider": reasoning_provider,
-                "reasoning_model": reasoning_model,
-                "reasoning_api_key": reasoning_api_key if reasoning_api_key else "",
-                "ocr_backend": ocr_backend,
-                "ocr_model": ocr_model,
-                "ocr_mode": ocr_prompt_mode,
-                "use_gpu": str(use_gpu).lower(),
-                "agentic_mode": str(agentic_mode).lower(),
-                "extraction_graph_mode": str(extraction_graph_mode).lower(),
-            }
+            file_bytes = uploaded_file.getvalue()
+            files = {"file": (uploaded_file.name, file_bytes, uploaded_file.type)}
+            payload = AnalyzePayload(
+                structuring_provider=structuring_provider,
+                structuring_model=structuring_model,
+                structuring_api_key=structuring_api_key or "",
+                reasoning_provider=reasoning_provider,
+                reasoning_model=reasoning_model,
+                reasoning_api_key=reasoning_api_key or "",
+                ocr_backend=ocr_backend,
+                ocr_model=ocr_model,
+                ocr_mode=ocr_prompt_mode,
+                use_gpu=use_gpu,
+                agentic_mode=agentic_mode,
+                extraction_graph_mode=extraction_graph_mode,
+            )
             try:
                 # Call Backend API
-                response = requests.post(
-                    f"{API_URL}/analyze",
+                response = _api_client().post(
+                    "/analyze",
                     files=files,
-                    data=data,
-                    timeout=DEFAULT_TIMEOUT,
-                    headers=_auth_headers(),
+                    data=payload.as_form(),
                 )
                 if response.status_code == 200:
                     data = response.json()
                     # Update Session State
                     st.session_state["extracted_data"] = data["extracted"]
                     st.session_state["analysis"] = data["analysis"]
-                    st.session_state["pdf_path"] = data.get("file_path")
                     st.session_state["file_url"] = data.get("file_url")
                     st.session_state["ocr_artifacts"] = data.get("ocr")
-                    st.session_state["annotated_pdf_path"] = data.get("annotated_pdf_path")
                     st.session_state["annotated_pdf_url"] = data.get("annotated_pdf_url")
-                    st.session_state["annotated_image_paths"] = data.get("annotated_image_paths", [])
                     st.session_state["annotated_image_urls"] = data.get("annotated_image_urls", [])
                     st.session_state["page_image_urls"] = data.get("page_image_urls", [])
                     st.session_state["bounding_boxes"] = data.get("bounding_boxes", [])
@@ -333,11 +381,9 @@ with tab1:
 
             if st.button("💾 Confirm & Save to Database"):
                 try:
-                    save_response = requests.post(
-                        f"{API_URL}/confirm",
+                    save_response = _api_client().post(
+                        "/confirm",
                         json=edited_data,
-                        timeout=DEFAULT_TIMEOUT,
-                        headers=_auth_headers(),
                     )
                     if save_response.status_code == 200:
                         st.toast("Record Saved successfully!", icon="✅")
@@ -441,30 +487,25 @@ with tab4:
     if policy_file and st.session_state["extracted_data"]:
         if st.button("Check Eligibility"):
             with st.spinner("Comparing Policy vs Diagnosis..."):
-                files = {"policy_file": (policy_file.name, policy_file.getvalue(), policy_file.type)}
-                # Send the extracted medical data as a JSON string field
-                payload = {
-                    "medical_json": json.dumps(st.session_state["extracted_data"]),
-                    "provider": reasoning_provider,
-                    "model": reasoning_model,
-                    "api_key": reasoning_api_key if reasoning_api_key else "",
-                    "reasoning_provider": reasoning_provider,
-                    "reasoning_model": reasoning_model,
-                    "reasoning_api_key": reasoning_api_key if reasoning_api_key else "",
-                    "ocr_backend": ocr_backend,
-                    "ocr_model": ocr_model,
-                    "ocr_mode": ocr_prompt_mode,
-                    "use_gpu": str(use_gpu).lower(),
-                    "policy_ocr": str(policy_file.type != "text/plain").lower(),
-                }
+                policy_bytes = policy_file.getvalue()
+                files = {"policy_file": (policy_file.name, policy_bytes, policy_file.type)}
+                payload = InsurancePayload(
+                    medical_json=json.dumps(st.session_state["extracted_data"]),
+                    reasoning_provider=reasoning_provider,
+                    reasoning_model=reasoning_model,
+                    reasoning_api_key=reasoning_api_key or "",
+                    ocr_backend=ocr_backend,
+                    ocr_model=ocr_model,
+                    ocr_mode=ocr_prompt_mode,
+                    use_gpu=use_gpu,
+                    policy_ocr=policy_file.type != "text/plain",
+                )
 
                 try:
-                    res = requests.post(
-                        f"{API_URL}/check_insurance",
+                    res = _api_client().post(
+                        "/check_insurance",
                         files=files,
-                        data=payload,
-                        timeout=DEFAULT_TIMEOUT,
-                        headers=_auth_headers(),
+                        data=payload.as_form(),
                     )
                     if res.status_code == 200:
                         result = res.json()
