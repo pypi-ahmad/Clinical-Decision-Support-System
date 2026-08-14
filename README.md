@@ -397,3 +397,5 @@ This project is provided as-is for research and development purposes.
 Built with [FastAPI](https://fastapi.tiangolo.com) &middot; [Streamlit](https://streamlit.io) &middot; [LangGraph](https://langchain-ai.github.io/langgraph/) &middot; [Qdrant](https://qdrant.tech) &middot; [Ollama](https://ollama.com)
 
 </div>
+
+<p align="center">Made with ❤️ by Ahmad Mujtaba</p>
